@@ -10,8 +10,28 @@ import type {
   SendTransactionResponse,
 } from "@trustless-work/escrow/types";
 
+export const STELLAR_NETWORK = "TESTNET" as const;
+
 export const STELLAR_TESTNET_HORIZON_URL =
   "https://horizon-testnet.stellar.org";
+
+export function getHorizonTestnetUrl(): string {
+  const configured = (
+    process.env.STELLAR_HORIZON_URL || STELLAR_TESTNET_HORIZON_URL
+  )
+    .trim()
+    .replace(/\/+$/, "");
+
+  if (
+    configured.includes("horizon.stellar.org") &&
+    !configured.includes("testnet")
+  ) {
+    throw new Error(
+      "STELLAR_HORIZON_URL debe apuntar a Stellar Testnet (horizon-testnet.stellar.org), nunca a Mainnet."
+    );
+  }
+  return configured || STELLAR_TESTNET_HORIZON_URL;
+}
 
 export const STELLAR_TESTNET_USDC_ISSUER =
   "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
@@ -90,6 +110,16 @@ function getTrustlessWorkEnv(): TrustlessWorkConfigEnv {
   )
     .trim()
     .replace(/\/+$/, "");
+
+  if (
+    apiUrl === "https://api.trustlesswork.com" ||
+    (!apiUrl.includes("dev.") && !apiUrl.includes("testnet") && !apiUrl.includes("localhost"))
+  ) {
+    throw new Error(
+      "TRUSTLESS_WORK_API_URL debe apuntar al entorno Testnet/Dev (https://dev.api.trustlesswork.com)."
+    );
+  }
+
   const apiKey = (process.env.TRUSTLESS_WORK_API_KEY || "").trim();
   const treasuryPublic = (process.env.STELLAR_TREASURY_PUBLIC || "").trim();
   const treasurySecret = (process.env.STELLAR_TREASURY_SECRET || "").trim();
@@ -108,12 +138,17 @@ function getTrustlessWorkEnv(): TrustlessWorkConfigEnv {
   const treasuryKeypair = StellarSdk.Keypair.fromSecret(treasurySecret);
   const derivedPublic = treasuryKeypair.publicKey();
 
+  if (isClassicStellarGAddress(treasuryPublic) && treasuryPublic !== derivedPublic) {
+    console.warn("[EcoBanco Testnet Audit][TREASURY_KEY_MISMATCH]", {
+      configuredPublic: treasuryPublic,
+      derivedPublic,
+    });
+  }
+
   return {
     apiUrl,
     apiKey,
-    treasuryPublic: isClassicStellarGAddress(treasuryPublic)
-      ? treasuryPublic
-      : derivedPublic,
+    treasuryPublic: derivedPublic,
     treasurySecret,
     treasuryKeypair,
   };
@@ -168,11 +203,12 @@ async function fetchHorizonAccount(
   address: string
 ): Promise<HorizonAccountResponse | null> {
   if (!isClassicStellarGAddress(address)) return null;
+  const horizonUrl = getHorizonTestnetUrl();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 7000);
   try {
     const res = await fetch(
-      `${STELLAR_TESTNET_HORIZON_URL}/accounts/${encodeURIComponent(address)}`,
+      `${horizonUrl}/accounts/${encodeURIComponent(address)}`,
       {
         method: "GET",
         signal: controller.signal,
@@ -228,7 +264,7 @@ export async function ensureTreasuryReady(
   minUsdcRequired = 50
 ): Promise<void> {
   const { treasuryPublic, treasuryKeypair } = getTrustlessWorkEnv();
-  const server = new StellarSdk.Horizon.Server(STELLAR_TESTNET_HORIZON_URL);
+  const server = new StellarSdk.Horizon.Server(getHorizonTestnetUrl());
 
   let acct = await fetchHorizonAccount(treasuryPublic);
   if (!acct) {
@@ -535,6 +571,11 @@ export async function fundMultiReleaseEscrow(params: {
   }
 
   const fundSend = await sendSignedTransactionToTrustlessWork(signedXdr);
+  console.info("[EcoBanco Testnet Audit][ESCROW_FUNDED]", {
+    contractId: params.contractId,
+    fundTxHash: fundSend.txHash,
+    amountUsdc: params.amount,
+  });
   return {
     fundTxHash: fundSend.txHash,
     amount: params.amount,
@@ -564,6 +605,12 @@ export async function deployAndFundMultiReleaseOrder(
     );
   }
 
+  console.info("[EcoBanco Testnet Audit][ESCROW_DEPLOYED]", {
+    contractId,
+    engagementId: input.engagementId,
+    deployTxHash: deploySend.txHash,
+  });
+
   const funded = await fundMultiReleaseEscrow({
     contractId,
     amount: prepared.totalFundedAmount,
@@ -589,6 +636,61 @@ export async function deployAndFundMultiReleaseOrder(
     riderServiceProvider: prepared.riderServiceProvider,
     subsidizedDelivery: Boolean(input.subsidizedDelivery),
   };
+}
+
+/**
+ * Registra en segundo plano el hito de recojo en tránsito ("InProgress") sobre Soroban Testnet
+ * sin exponer códigos secretos de entrega ni bloquear al repartidor.
+ */
+export async function recordPickupMilestoneEvidence(params: {
+  contractId: string;
+  deliveryId?: string;
+  orderId?: string;
+  riderName?: string;
+}): Promise<{ txHash: string } | null> {
+  const cleanContractId = (params.contractId || "").trim();
+  if (!isValidSorobanContractId(cleanContractId)) {
+    return null;
+  }
+
+  const { treasuryPublic } = getTrustlessWorkEnv();
+  const evidence = `Recojo EcoDohmi confirmado${
+    params.riderName ? ` por ${params.riderName}` : ""
+  }${params.orderId ? ` (Orden ${params.orderId})` : ""}`;
+
+  const changePayload: ChangeMilestoneStatusPayload = {
+    contractId: cleanContractId,
+    milestoneIndex: "0",
+    newStatus: "InProgress",
+    newEvidence: evidence,
+    serviceProvider: treasuryPublic,
+  };
+
+  const changeInit = await trustlessWorkRequest<EscrowRequestResponse>(
+    "/escrow/multi-release/change-milestone-status",
+    {
+      method: "POST",
+      body: changePayload,
+    }
+  );
+
+  if (!changeInit.unsignedTransaction) {
+    return null;
+  }
+
+  const signedChange = signXdrWithTreasury(changeInit.unsignedTransaction);
+  const sendRes = await sendSignedTransactionToTrustlessWork(
+    signedChange.signedXdr
+  );
+
+  console.info("[EcoBanco Testnet Audit][MILESTONE_IN_PROGRESS_OK]", {
+    contractId: cleanContractId,
+    deliveryId: params.deliveryId ?? null,
+    orderId: params.orderId ?? null,
+    txHash: sendRes.txHash,
+  });
+
+  return { txHash: sendRes.txHash };
 }
 
 /**
@@ -704,7 +806,7 @@ export async function approveAndReleaseMultiReleaseOrder(params: {
     );
   }
 
-  const evidence = `Entrega EcoDohmi confirmada con PIN ${params.deliveryPin}${
+  const evidence = `Entrega EcoDohmi confirmada${
     params.orderId ? ` (Orden ${params.orderId})` : ""
   }`;
 
@@ -720,6 +822,14 @@ export async function approveAndReleaseMultiReleaseOrder(params: {
     evidence: `${evidence} - Hito 2: Envío Ecológico EcoDohmi`,
   });
 
+  console.info("[EcoBanco Testnet Audit][ESCROW_RELEASED]", {
+    contractId: cleanContractId,
+    orderId: params.orderId ?? null,
+    deliveryId: params.deliveryId ?? null,
+    milestone0ReleaseTxHash: milestone0.releaseTxHash,
+    milestone1ReleaseTxHash: milestone1.releaseTxHash,
+  });
+
   // Actualización no bloqueante del indexer de Trustless Work
   void trustlessWorkRequest("/indexer/update-from-txhash", {
     method: "PUT",
@@ -730,5 +840,48 @@ export async function approveAndReleaseMultiReleaseOrder(params: {
     releaseTxHash: milestone1.releaseTxHash,
     milestone0ReleaseTxHash: milestone0.releaseTxHash,
     milestone1ReleaseTxHash: milestone1.releaseTxHash,
+  };
+}
+
+/**
+ * Diagnóstico de lectura para verificar conectividad en Stellar Testnet y Trustless Work Dev API.
+ */
+export async function getTrustlessWorkTestnetStatus(): Promise<{
+  network: typeof STELLAR_NETWORK;
+  horizonUrl: string;
+  apiUrl: string;
+  treasuryPublic: string;
+  treasuryExists: boolean;
+  usdcBalance: number;
+  indexerReachable: boolean;
+}> {
+  const { apiUrl, treasuryPublic } = getTrustlessWorkEnv();
+  const horizonUrl = getHorizonTestnetUrl();
+  const acct = await fetchHorizonAccount(treasuryPublic);
+  const usdcEntry = acct?.balances?.find(
+    (b) =>
+      b.asset_code === "USDC" &&
+      b.asset_issuer === STELLAR_TESTNET_USDC_ISSUER
+  );
+
+  let indexerReachable = false;
+  try {
+    await trustlessWorkRequest<unknown>(
+      `/helper/get-escrows-by-signer?signer=${encodeURIComponent(treasuryPublic)}`,
+      { method: "GET" }
+    );
+    indexerReachable = true;
+  } catch {
+    indexerReachable = false;
+  }
+
+  return {
+    network: STELLAR_NETWORK,
+    horizonUrl,
+    apiUrl,
+    treasuryPublic,
+    treasuryExists: Boolean(acct),
+    usdcBalance: usdcEntry ? Number(usdcEntry.balance) : 0,
+    indexerReachable,
   };
 }

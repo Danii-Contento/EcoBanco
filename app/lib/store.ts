@@ -26,6 +26,7 @@ import {
   approveAndReleaseMultiReleaseOrder,
   deployAndFundMultiReleaseOrder,
   isValidSorobanContractId,
+  recordPickupMilestoneEvidence,
 } from "./trustlessWork";
 
 export const SUBSCRIPTION_COST = 100; // 100 MOTES o 100 Bs en FIAT
@@ -2774,6 +2775,26 @@ export class SupabaseEcoBancoRepository {
     }
 
     const enriched = enrichDeliveriesWithContext([updated], orders, users)[0];
+
+    const relatedOrder = orders.find((o) => o.id === updated.order_id);
+    const resolvedContractId = (
+      relatedOrder?.contract_id ||
+      updated.contract_id ||
+      ""
+    ).trim();
+    if (isValidSorobanContractId(resolvedContractId)) {
+      void recordPickupMilestoneEvidence({
+        contractId: resolvedContractId,
+        deliveryId: updated.id,
+        orderId: relatedOrder?.id || updated.order_id,
+        riderName: rider.name,
+      }).catch((err) => {
+        console.warn(
+          "[EcoBanco Testnet Audit][PICKUP_MILESTONE_WARN]",
+          err instanceof Error ? err.message : String(err)
+        );
+      });
+    }
 
     return {
       ok: true,

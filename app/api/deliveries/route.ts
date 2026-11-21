@@ -294,6 +294,17 @@ export async function POST(request: NextRequest) {
       }
 
       const state = await db.getDeliveriesState(session);
+      console.info("[EcoBanco Escrow Audit][RIDER_RELEASE_OK]", {
+        orderId: result.order?.id ?? result.delivery?.order_id ?? null,
+        deliveryId: result.delivery?.id ?? deliveryId ?? null,
+        contractId:
+          result.order?.contract_id ?? result.delivery?.contract_id ?? null,
+        releaseTxHash:
+          result.order?.release_tx_hash ??
+          result.delivery?.release_tx_hash ??
+          null,
+      });
+
       return applyNoStoreHeaders(
         NextResponse.json({
           message:

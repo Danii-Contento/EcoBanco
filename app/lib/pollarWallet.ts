@@ -13,6 +13,12 @@ export const STELLAR_TESTNET_USDC = {
   issuer: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
 } as const;
 
+export const POLLAR_TESTNET_CONFIG = {
+  network: "testnet",
+  usdc: STELLAR_TESTNET_USDC,
+  defaultApiUrl: "https://sdk.api.pollar.xyz",
+} as const;
+
 const STELLAR_CLASSIC_ACCOUNT_REGEX = /^G[A-Z2-7]{55}$/;
 const STELLAR_TX_HASH_REGEX = /^[a-fA-F0-9]{64}$/;
 
