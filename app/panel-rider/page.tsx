@@ -12,7 +12,6 @@ import {
   COMMUNITY_COPY,
   formatBs,
   formatMotes,
-  formatOrderCode,
   normalizeDeliveryStatusKey,
   sanitizeUserError,
   translateBackendMessage,
@@ -24,6 +23,10 @@ import {
 } from "@/app/lib/useDisconnectOnReload";
 import { PollarWalletSection } from "@/app/components/PollarWalletSection";
 import { ThemeToggleSetting } from "@/app/components/ThemeToggleSetting";
+import { RiderAvailableList } from "@/app/components/rider/RiderAvailableList";
+import { RiderActiveDeliveries } from "@/app/components/rider/RiderActiveDeliveries";
+import { RiderEarningsTab } from "@/app/components/rider/RiderEarningsTab";
+import { RiderBottomNav, RiderTab } from "@/app/components/rider/RiderBottomNav";
 import {
   Delivery,
   Order,
@@ -31,7 +34,6 @@ import {
   RiderVehicleType,
 } from "@/app/types/ecobanco";
 
-type RiderTab = "disponibles" | "en_curso" | "ganancias";
 type AuthStatus = "checking" | "unauthenticated" | "authenticated";
 
 function normalizeStatus(status?: string) {
@@ -68,6 +70,8 @@ export default function PanelRiderPage() {
   const [ciInput, setCiInput] = useState<string>("");
   const [selfieUrlInput, setSelfieUrlInput] = useState<string>("");
   const [ciPhotoUrlInput, setCiPhotoUrlInput] = useState<string>("");
+  const [selfieKb, setSelfieKb] = useState<number | null>(null);
+  const [ciKb, setCiKb] = useState<number | null>(null);
   const [isUploadingSelfie, setIsUploadingSelfie] = useState<boolean>(false);
   const [isUploadingCiPhoto, setIsUploadingCiPhoto] = useState<boolean>(false);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
@@ -95,6 +99,8 @@ export default function PanelRiderPage() {
     setDeliveries([]);
     setOrders([]);
     setPinInputs({});
+    setSelfieKb(null);
+    setCiKb(null);
     setShowSettings(false);
     setAuthTab("login");
     setAuthStatus("unauthenticated");
@@ -238,6 +244,10 @@ export default function PanelRiderPage() {
         maxDimension: 1080,
         maxBytes: 80 * 1024,
       });
+      const compressedSizeKb = Math.max(
+        1,
+        Math.round(compressed.sizeBytes / 1024)
+      );
 
       const res = await fetch("/api/storage", {
         method: "POST",
@@ -256,8 +266,10 @@ export default function PanelRiderPage() {
 
       if (kind === "selfie") {
         setSelfieUrlInput(data.publicUrl);
+        setSelfieKb(compressedSizeKb);
       } else {
         setCiPhotoUrlInput(data.publicUrl);
+        setCiKb(compressedSizeKb);
       }
     } catch (err) {
       setOnboardingError(sanitizeUserError(err));
@@ -741,7 +753,7 @@ export default function PanelRiderPage() {
                 <button
                   type="submit"
                   disabled={isSubmittingLogin}
-                  className="w-full min-h-[52px] py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg sm:text-xl shadow-gold-glow border-2 border-[#fff3cc]/70 active:scale-95 transition disabled:opacity-60"
+                  className="w-full min-h-[56px] py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg sm:text-xl shadow-gold-glow border-2 border-[#fff3cc]/70 active:scale-95 transition disabled:opacity-60"
                 >
                   {isSubmittingLogin
                     ? "Verificando credencial..."
@@ -843,7 +855,7 @@ export default function PanelRiderPage() {
                       <button
                         type="button"
                         onClick={() => setVehicleInput("bicicleta")}
-                        className={`min-h-[48px] p-3.5 rounded-2xl border-2 text-center transition space-y-1 ${
+                        className={`min-h-[64px] p-3.5 rounded-2xl border-2 text-center transition space-y-1 ${
                           vehicleInput === "bicicleta"
                             ? "eco-alert-success font-extrabold"
                             : "eco-btn-ghost"
@@ -858,7 +870,7 @@ export default function PanelRiderPage() {
                       <button
                         type="button"
                         onClick={() => setVehicleInput("moto_electrica")}
-                        className={`min-h-[48px] p-3.5 rounded-2xl border-2 text-center transition space-y-1 ${
+                        className={`min-h-[64px] p-3.5 rounded-2xl border-2 text-center transition space-y-1 ${
                           vehicleInput === "moto_electrica"
                             ? "eco-card-gold font-extrabold"
                             : "eco-btn-ghost"
@@ -896,7 +908,9 @@ export default function PanelRiderPage() {
                             className="w-24 h-24 rounded-2xl object-cover mx-auto border-2 border-brote"
                           />
                           <span className="inline-block text-sm font-bold eco-text-green">
-                            ✅ Selfie cargada · Toca para cambiar
+                            ✅ Selfie cargada
+                            {selfieKb !== null ? ` (${selfieKb} KB)` : ""} ·
+                            Toca para cambiar
                           </span>
                         </div>
                       ) : (
@@ -935,7 +949,9 @@ export default function PanelRiderPage() {
                             className="w-36 h-24 rounded-xl object-cover mx-auto border-2 border-brote"
                           />
                           <span className="inline-block text-sm font-bold eco-text-green">
-                            ✅ Foto de CI cargada · Toca para cambiar
+                            ✅ Foto de CI cargada
+                            {ciKb !== null ? ` (${ciKb} KB)` : ""} · Toca para
+                            cambiar
                           </span>
                         </div>
                       ) : (
@@ -968,7 +984,7 @@ export default function PanelRiderPage() {
                       isUploadingSelfie ||
                       isUploadingCiPhoto
                     }
-                    className="w-full min-h-[52px] py-4 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-lg sm:text-xl shadow-green-glow border-2 border-white/40 active:scale-95 transition disabled:opacity-60"
+                    className="w-full min-h-[56px] py-4 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-lg sm:text-xl shadow-green-glow border-2 border-white/40 active:scale-95 transition disabled:opacity-60"
                   >
                     {isSubmittingOnboarding
                       ? "Preparando tu libreta comunitaria..."
@@ -984,14 +1000,14 @@ export default function PanelRiderPage() {
   }
 
   return (
-    <div className="min-h-screen eco-page font-sans pb-16">
+    <div className="min-h-screen eco-page font-sans pb-28">
       <main className="max-w-md sm:max-w-2xl mx-auto px-4 pt-6 space-y-5">
         {/* Barra superior */}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <button
             type="button"
             onClick={() => void handleRiderLogout(true)}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl eco-btn-ghost text-sm font-bold"
+            className="inline-flex items-center gap-1.5 px-4 min-h-[48px] py-2.5 rounded-2xl eco-btn-ghost text-sm font-bold"
           >
             ← Inicio
           </button>
@@ -1000,7 +1016,7 @@ export default function PanelRiderPage() {
             <button
               type="button"
               onClick={() => setShowSettings((prev) => !prev)}
-              className={`px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-extrabold transition ${
+              className={`px-3.5 min-h-[48px] py-2.5 rounded-2xl text-xs sm:text-sm font-extrabold transition ${
                 showSettings ? "bg-oro text-bosque shadow" : "eco-btn-ghost"
               }`}
             >
@@ -1010,14 +1026,14 @@ export default function PanelRiderPage() {
               type="button"
               disabled={isLoadingData}
               onClick={() => void loadProtectedRiderData()}
-              className="px-3.5 py-2.5 rounded-xl eco-btn-ghost text-xs sm:text-sm font-bold disabled:opacity-60"
+              className="px-3.5 min-h-[48px] py-2.5 rounded-2xl eco-btn-ghost text-xs sm:text-sm font-bold disabled:opacity-60"
             >
               {isLoadingData ? "Actualizando..." : "🔄 Actualizar"}
             </button>
             <button
               type="button"
               onClick={() => void handleRiderLogout(false)}
-              className="px-3.5 py-2.5 rounded-xl eco-btn-danger text-xs sm:text-sm font-bold"
+              className="px-3.5 min-h-[48px] py-2.5 rounded-2xl eco-btn-danger text-xs sm:text-sm font-bold"
             >
               Salir
             </button>
@@ -1094,7 +1110,7 @@ export default function PanelRiderPage() {
                 <button
                   type="button"
                   onClick={handleCopyInviteCode}
-                  className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-oro to-brillo text-bosque font-extrabold text-xs uppercase shadow active:scale-95 transition"
+                  className="px-4 min-h-[48px] py-2.5 rounded-xl bg-gradient-to-r from-oro to-brillo text-bosque font-extrabold text-xs uppercase shadow active:scale-95 transition"
                 >
                   {copiedCode ? "✅ ¡Copiado!" : "📋 Copiar credencial"}
                 </button>
@@ -1130,411 +1146,55 @@ export default function PanelRiderPage() {
           </div>
         )}
 
-        {/* 3 Pestañas del Repartidor */}
-        <nav
-          aria-label="Secciones del Repartidor"
-          className="grid grid-cols-3 gap-1.5 p-1.5 rounded-2xl eco-inset"
-        >
-          <button
-            type="button"
-            onClick={() => setActiveTab("disponibles")}
-            className={`py-3 px-2 rounded-xl text-xs sm:text-sm font-extrabold transition ${
-              activeTab === "disponibles"
-                ? "bg-gradient-to-r from-oro to-brillo text-bosque shadow"
-                : "eco-text-muted hover:eco-text"
-            }`}
-          >
-            📦 Disponibles ({availableDeliveries.length})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab("en_curso")}
-            className={`py-3 px-2 rounded-xl text-xs sm:text-sm font-extrabold transition ${
-              activeTab === "en_curso"
-                ? "bg-gradient-to-r from-brote to-[#5cd060] text-bosque shadow"
-                : "eco-text-muted hover:eco-text"
-            }`}
-          >
-            🚲 En Curso ({inProgressDeliveries.length})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab("ganancias")}
-            className={`py-3 px-2 rounded-xl text-xs sm:text-sm font-extrabold transition ${
-              activeTab === "ganancias"
-                ? "bg-gradient-to-r from-oro via-brillo to-oro text-bosque shadow"
-                : "eco-text-muted hover:eco-text"
-            }`}
-          >
-            💵 Ganancias ({completedDeliveries.length})
-          </button>
-        </nav>
-
         {/* PESTAÑA 1: PEDIDOS DISPONIBLES */}
         {activeTab === "disponibles" && (
-          <section aria-label="Pedidos Disponibles" className="space-y-4">
-            {isLoadingData ? (
-              <div className="h-40 rounded-2xl eco-inset animate-pulse" />
-            ) : availableDeliveries.length === 0 ? (
-              <div className="rounded-2xl eco-card p-8 text-center space-y-2">
-                <div className="text-4xl">🚲</div>
-                <h2 className="font-brand text-xl eco-text">
-                  No hay pedidos disponibles por ahora
-                </h2>
-                <p className="text-sm eco-text-muted">
-                  Cuando un vecino haga un pedido en tu zona, aparecerá aquí
-                  para que lo recojas.
-                </p>
-              </div>
-            ) : (
-              availableDeliveries.map((del) => {
-                const order = orderById.get(del.order_id);
-                const isBusy = actionBusyId === del.id;
-                const feeBs = Math.round(Number(del.delivery_fee_motes ?? 5));
-                return (
-                  <article
-                    key={del.id}
-                    className="rounded-2xl eco-card-gold p-4 sm:p-5 space-y-4"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="space-y-0.5">
-                        <span className="font-mono text-xs font-extrabold eco-text-gold block">
-                          {formatOrderCode(
-                            del.order_id ||
-                              del.contract_id ||
-                              order?.contract_id
-                          )}
-                        </span>
-                        <h2 className="font-brand text-xl eco-text">
-                          {(del.quantity ?? 1) > 1 ? `${del.quantity}x ` : ""}
-                          {del.product_name}
-                        </h2>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <span className="px-3 py-1.5 rounded-xl eco-alert-success text-base font-brand block">
-                          +{formatBs(feeBs)}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl eco-inset p-3.5 space-y-1.5 text-sm">
-                      <p className="eco-text">
-                        🏪 <strong>Recoger en:</strong> {del.seller_name}
-                        {del.pickup_address ? ` (${del.pickup_address})` : ""}
-                      </p>
-                      <p className="eco-text">
-                        📍 <strong>Entregar a:</strong> {del.buyer_name}
-                        {del.delivery_address
-                          ? ` · ${del.delivery_address}`
-                          : ""}
-                      </p>
-                      {del.special_notes && (
-                        <p className="text-xs font-semibold eco-card-gold rounded-lg px-2.5 py-1.5">
-                          📝 <strong>Nota del pedido:</strong>{" "}
-                          {del.special_notes}
-                        </p>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => handleAcceptDelivery(del.id)}
-                      className="w-full py-4 px-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg tracking-wide shadow-gold-glow active:scale-95 transition"
-                    >
-                      {isBusy ? "Tomando pedido..." : "Tomar este Pedido →"}
-                    </button>
-                  </article>
-                );
-              })
-            )}
-          </section>
+          <RiderAvailableList
+            deliveries={availableDeliveries}
+            orderById={orderById}
+            isLoading={isLoadingData}
+            actionBusyId={actionBusyId}
+            onAcceptDelivery={handleAcceptDelivery}
+          />
         )}
 
-        {/* PESTAÑA 2: EN CURSO */}
+        {/* PESTAÑA 2: EN CURSO (USO A UNA MANO) */}
         {activeTab === "en_curso" && (
-          <section aria-label="Pedidos En Curso" className="space-y-4">
-            {inProgressDeliveries.length === 0 ? (
-              <div className="rounded-2xl eco-card p-8 text-center space-y-2">
-                <div className="text-4xl">🚲</div>
-                <h2 className="font-brand text-xl eco-text">
-                  No tienes entregas en curso
-                </h2>
-                <p className="text-sm eco-text-muted">
-                  Toma un pedido en Disponibles para recogerlo donde la caserita
-                  y llevarlo al vecino.
-                </p>
-              </div>
-            ) : (
-              inProgressDeliveries.map((del) => {
-                const status = normalizeStatus(del.delivery_status);
-                const isBusy = actionBusyId === del.id;
-                const order = orderById.get(del.order_id);
-                const feeBs = Math.round(Number(del.delivery_fee_motes ?? 5));
-
-                return (
-                  <article
-                    key={del.id}
-                    className="rounded-2xl eco-card-green p-4 sm:p-5 space-y-4"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2 mb-1">
-                          <span className="font-mono text-xs font-extrabold eco-text-gold">
-                            {formatOrderCode(
-                              del.order_id ||
-                                del.contract_id ||
-                                order?.contract_id
-                            )}
-                          </span>
-                          <span className="px-2.5 py-0.5 rounded-full bg-oro text-bosque text-xs font-extrabold uppercase">
-                            {status === "in_transit"
-                              ? "🚲 En Camino al Vecino"
-                              : "🏪 Recoger en Puesto"}
-                          </span>
-                        </div>
-                        <h2 className="font-brand text-xl eco-text">
-                          {(del.quantity ?? 1) > 1 ? `${del.quantity}x ` : ""}
-                          {del.product_name}
-                        </h2>
-                      </div>
-                      <span className="font-brand text-lg eco-text-gold shrink-0">
-                        +{formatBs(feeBs)}
-                      </span>
-                    </div>
-
-                    <div className="rounded-xl eco-inset p-3.5 space-y-1.5 text-sm">
-                      <p className="eco-text">
-                        🏪 <strong>Caserita:</strong> {del.seller_name}
-                        {del.pickup_address ? ` · ${del.pickup_address}` : ""}
-                      </p>
-                      <p className="eco-text">
-                        📍 <strong>Vecino:</strong> {del.buyer_name}
-                        {del.delivery_address
-                          ? ` · ${del.delivery_address}`
-                          : ""}
-                      </p>
-                      {del.special_notes && (
-                        <p className="text-xs font-semibold eco-card-gold rounded-lg px-2.5 py-1.5">
-                          📝 <strong>Nota del pedido:</strong>{" "}
-                          {del.special_notes}
-                        </p>
-                      )}
-                    </div>
-
-                    {status === "pending" ? (
-                      <div className="rounded-2xl eco-pin-box border-2 border-oro p-4 sm:p-5 space-y-4">
-                        <div className="text-center space-y-2">
-                          <span className="text-xs font-extrabold uppercase tracking-wider text-oro block">
-                            Paso 1 · Al recoger en el puesto
-                          </span>
-                          <p className="text-base font-bold">
-                            Dile este código a tu caserita al recoger:
-                          </p>
-                          <div className="py-2 px-4 rounded-2xl bg-bosque border-2 border-brillo inline-block">
-                            <span className="font-mono text-5xl font-bold tracking-[0.22em] eco-pin-digits">
-                              {del.pickup_pin}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="space-y-2 pt-2 border-t border-arena/15">
-                          <label className="block text-xs font-bold uppercase text-center">
-                            Escribe el código de 4 números para confirmar que ya
-                            recogiste el pedido:
-                          </label>
-                          <div className="flex flex-col sm:flex-row gap-2.5">
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              maxLength={4}
-                              value={pinInputs[del.id] || ""}
-                              onChange={(e) =>
-                                setPinInputs((prev) => ({
-                                  ...prev,
-                                  [del.id]: e.target.value.replace(/\D/g, ""),
-                                }))
-                              }
-                              placeholder="0000"
-                              className="sm:w-40 px-4 py-3.5 rounded-xl bg-bosque border-2 border-oro font-mono text-2xl font-bold tracking-[0.25em] text-center text-brillo"
-                            />
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={() => handleValidatePickup(del.id)}
-                              className="flex-1 py-3.5 px-4 rounded-xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg shadow-gold-glow"
-                            >
-                              {isBusy
-                                ? "Confirmando recojo..."
-                                : "Confirmar Recojo →"}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="rounded-2xl eco-pin-box border-2 border-brote p-4 sm:p-5 space-y-4">
-                        <div className="text-center space-y-2">
-                          <span className="text-xs font-extrabold uppercase tracking-wider text-brote block">
-                            Paso 2 · Al entregar al vecino
-                          </span>
-                          <p className="text-base font-bold">
-                            Dile este código al vecino al entregar:
-                          </p>
-                          <div className="py-2 px-4 rounded-2xl bg-bosque border-2 border-brote inline-block">
-                            <span className="font-mono text-5xl font-bold tracking-[0.22em] eco-pin-digits">
-                              {del.delivery_pin}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="space-y-2 pt-2 border-t border-arena/15">
-                          <label className="block text-xs font-bold uppercase text-center">
-                            Escribe el código de 4 números para confirmar la
-                            entrega y cobrar:
-                          </label>
-                          <div className="flex flex-col sm:flex-row gap-2.5">
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              maxLength={4}
-                              value={pinInputs[del.id] || ""}
-                              onChange={(e) =>
-                                setPinInputs((prev) => ({
-                                  ...prev,
-                                  [del.id]: e.target.value.replace(/\D/g, ""),
-                                }))
-                              }
-                              placeholder="0000"
-                              className="sm:w-40 px-4 py-3.5 rounded-xl bg-bosque border-2 border-brote font-mono text-2xl font-bold tracking-[0.25em] text-center text-brillo"
-                            />
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={() => handleValidateDelivery(del.id)}
-                              className="flex-1 py-3.5 px-4 rounded-xl bg-gradient-to-r from-brote to-[#5cd060] text-bosque font-brand text-lg shadow-green-glow"
-                            >
-                              {isBusy
-                                ? "Confirmando entrega..."
-                                : "Confirmar Entrega y Cobrar ✓"}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </article>
-                );
-              })
-            )}
-          </section>
+          <RiderActiveDeliveries
+            deliveries={inProgressDeliveries}
+            orderById={orderById}
+            pinInputs={pinInputs}
+            actionBusyId={actionBusyId}
+            onPinChange={(deliveryId, digits) =>
+              setPinInputs((prev) => ({
+                ...prev,
+                [deliveryId]: digits,
+              }))
+            }
+            onValidatePickup={handleValidatePickup}
+            onValidateDelivery={handleValidateDelivery}
+          />
         )}
 
         {/* PESTAÑA 3: MIS GANANCIAS */}
         {activeTab === "ganancias" && (
-          <section aria-label="Mis Ganancias" className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="rounded-2xl eco-card-gold p-5">
-                <span className="text-xs font-extrabold uppercase tracking-wider eco-text-muted block">
-                  Dinero Disponible (Bs)
-                </span>
-                <div className="my-2 flex items-baseline gap-1.5">
-                  <span className="font-brand text-4xl eco-text-gold">
-                    {totalEarnedBs}
-                  </span>
-                  <span className="text-lg font-extrabold eco-text-gold">
-                    Bs
-                  </span>
-                </div>
-                <p className="text-xs eco-text-green font-bold">
-                  🛡️ {COMMUNITY_COPY.zeroCommission}
-                </p>
-                <p className="text-xs eco-text-muted mt-1">
-                  🚲 {subsidizedCount} entregas cubiertas por EcoBanco
-                </p>
-              </div>
-
-              <div className="rounded-2xl eco-card-green p-5">
-                <span className="text-xs font-extrabold uppercase tracking-wider eco-text-green block">
-                  Puntos de Trueque (MOTES)
-                </span>
-                <div className="my-2 flex items-baseline gap-1.5">
-                  <span className="font-brand text-4xl eco-text-green">
-                    {totalEarnedBs}
-                  </span>
-                  <span className="text-sm font-extrabold eco-text-green uppercase">
-                    MOTES
-                  </span>
-                </div>
-                <p className="text-xs font-bold eco-text">
-                  {COMMUNITY_COPY.moteParityDetail}
-                </p>
-                <p className="text-xs eco-text-muted mt-1">
-                  {rider?.completedDeliveries ?? 0} entregas completadas
-                </p>
-              </div>
-            </div>
-
-            <div className="rounded-2xl eco-card p-5 space-y-3.5">
-              <h2 className="font-brand text-xl eco-text">
-                Historial de Entregas ({completedDeliveries.length})
-              </h2>
-
-              {completedDeliveries.length === 0 ? (
-                <p className="text-sm eco-text-muted">
-                  Completa tu primera entrega confirmando el código con el
-                  vecino para ver aquí tus ganancias en Bolivianos (Bs).
-                </p>
-              ) : (
-                <div className="space-y-2.5">
-                  {completedDeliveries.map((del) => {
-                    const order = orderById.get(del.order_id);
-                    const feeBs = Math.round(
-                      Number(del.delivery_fee_motes ?? 5)
-                    );
-                    return (
-                      <div
-                        key={del.id}
-                        className="p-4 rounded-xl eco-inset space-y-2"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="space-y-0.5">
-                            <span className="font-mono text-xs font-bold eco-text-gold block">
-                              {formatOrderCode(
-                                del.order_id ||
-                                  del.contract_id ||
-                                  order?.contract_id
-                              )}{" "}
-                              · ✅ Entregado
-                            </span>
-                            <h3 className="font-bold text-sm eco-text">
-                              {(del.quantity ?? 1) > 1
-                                ? `${del.quantity}x `
-                                : ""}
-                              {del.product_name}
-                            </h3>
-                            <p className="text-xs eco-text-muted">
-                              {del.seller_name} → {del.buyer_name}
-                            </p>
-                          </div>
-                          <div className="text-right shrink-0">
-                            <span className="font-brand text-xl eco-text-gold block">
-                              +{formatBs(feeBs)}
-                            </span>
-                            <span className="text-xs font-bold eco-text-green">
-                              +{formatMotes(feeBs)}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </section>
+          <RiderEarningsTab
+            rider={rider}
+            completedDeliveries={completedDeliveries}
+            orderById={orderById}
+            totalEarnedBs={totalEarnedBs}
+            subsidizedCount={subsidizedCount}
+          />
         )}
       </main>
+
+      {/* Navegación fija inferior para usar con una sola mano */}
+      <RiderBottomNav
+        activeTab={activeTab}
+        availableCount={availableDeliveries.length}
+        inProgressCount={inProgressDeliveries.length}
+        completedCount={completedDeliveries.length}
+        onSelectTab={setActiveTab}
+      />
     </div>
   );
 }

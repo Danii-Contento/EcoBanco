@@ -11,12 +11,9 @@ import {
 import { compressImageToWebP } from "@/app/lib/imageCompressor";
 import {
   COMMUNITY_COPY,
-  formatBs,
-  formatOrderCode,
-  getDeliveryStatusCopy,
-  getPaymentProtectionCopy,
   getRechargeStatusLabel,
   getRechargeStatusMessage,
+  normalizeDeliveryStatusKey,
   sanitizeUserError,
   translateBackendMessage,
 } from "@/app/lib/friendlyCopy";
@@ -25,7 +22,9 @@ import {
   isPageReloadNavigation,
   useDisconnectOnPageUnload,
 } from "@/app/lib/useDisconnectOnReload";
-import { ProtectedPurchaseBar } from "@/app/components/ProtectedPurchaseBar";
+import { CaseritaOrdersTab } from "@/app/components/caserita/CaseritaOrdersTab";
+import { CaseritaStoreTab } from "@/app/components/caserita/CaseritaStoreTab";
+import { QuickProductModal } from "@/app/components/caserita/QuickProductModal";
 import {
   BankQrRechargeModal,
   RampCreditedEvent,
@@ -82,9 +81,12 @@ export default function PanelCaseritaPage() {
   const [regPhone, setRegPhone] = useState<string>("");
   const [regPin, setRegPin] = useState<string>("");
 
-  // Vista interna: "principal" | "configuracion"
+  // Vista interna: "principal" | "configuracion" y pestañas principales
   const [activeView, setActiveView] = useState<"principal" | "configuracion">(
     "principal"
+  );
+  const [caseritaTab, setCaseritaTab] = useState<"pedidos" | "puesto">(
+    "puesto"
   );
 
   // Estados de Configuración
@@ -99,14 +101,14 @@ export default function PanelCaseritaPage() {
   const [cfgError, setCfgError] = useState<string | null>(null);
   const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
 
-  // Modal de Alta / Edición de Producto
+  // Modal de Alta / Edición de Producto (3 campos + vista previa)
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [productStep, setProductStep] = useState<"edit" | "preview">("edit");
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [name, setName] = useState<string>("");
   const [priceMotes, setPriceMotes] = useState<string>("");
-  const [description, setDescription] = useState<string>("");
   const [imageUrl, setImageUrl] = useState<string>("");
+  const [lastCompressedKb, setLastCompressedKb] = useState<number | null>(null);
   const [productError, setProductError] = useState<string | null>(null);
   const [isSubmittingProduct, setIsSubmittingProduct] =
     useState<boolean>(false);
@@ -372,6 +374,11 @@ export default function PanelCaseritaPage() {
         maxDimension: 1080,
         maxBytes: 80 * 1024,
       });
+      if (bucket === "product-images") {
+        setLastCompressedKb(
+          Math.max(1, Math.round(compressed.sizeBytes / 1024))
+        );
+      }
       const res = await fetch("/api/storage", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -777,8 +784,8 @@ export default function PanelCaseritaPage() {
     setEditingProduct(null);
     setName("");
     setPriceMotes("");
-    setDescription("");
     setImageUrl("");
+    setLastCompressedKb(null);
     setProductError(null);
     setProductStep("edit");
     setIsModalOpen(true);
@@ -788,8 +795,8 @@ export default function PanelCaseritaPage() {
     setEditingProduct(item);
     setName(item.name);
     setPriceMotes(String(Math.round(item.priceMotes)));
-    setDescription(item.description);
     setImageUrl(item.imageUrl || "");
+    setLastCompressedKb(null);
     setProductError(null);
     setProductStep("edit");
     setIsModalOpen(true);
@@ -827,7 +834,7 @@ export default function PanelCaseritaPage() {
     setProductError(null);
     const resolvedPrice = Math.round(Number(priceMotes));
     const resolvedDescription =
-      description.trim() ||
+      editingProduct?.description?.trim() ||
       `${name.trim()} — Producto fresco de ${
         merchant?.storeName || "tu caserita del barrio"
       }.`;
@@ -921,6 +928,13 @@ export default function PanelCaseritaPage() {
   const orderById = useMemo(
     () => new Map(orders.map((o) => [o.id, o])),
     [orders]
+  );
+  const activeOrdersCount = useMemo(
+    () =>
+      myDeliveries.filter(
+        (d) => normalizeDeliveryStatusKey(d.delivery_status) !== "delivered"
+      ).length,
+    [myDeliveries]
   );
   const currentMotes = Math.round(merchant?.motes ?? 0);
   const canUnlockWithMotes = currentMotes >= SUBSCRIPTION_COST;
@@ -1070,7 +1084,7 @@ export default function PanelCaseritaPage() {
                 <button
                   type="submit"
                   disabled={isSubmittingAuth}
-                  className="w-full min-h-[52px] py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg sm:text-xl shadow-gold-glow border-2 border-[#fff3cc]/70 active:scale-95 transition"
+                  className="w-full min-h-[56px] py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg sm:text-xl shadow-gold-glow border-2 border-[#fff3cc]/70 active:scale-95 transition"
                 >
                   {isSubmittingAuth ? authBusyText : "Entrar a mi Puesto"}
                 </button>
@@ -1140,7 +1154,7 @@ export default function PanelCaseritaPage() {
                 <button
                   type="submit"
                   disabled={isSubmittingAuth}
-                  className="w-full min-h-[52px] py-4 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-lg sm:text-xl shadow-green-glow active:scale-95 transition"
+                  className="w-full min-h-[56px] py-4 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-lg sm:text-xl shadow-green-glow active:scale-95 transition"
                 >
                   {isSubmittingAuth ? authBusyText : "Abrir mi Puesto Gratis"}
                 </button>
@@ -1160,7 +1174,7 @@ export default function PanelCaseritaPage() {
           <button
             type="button"
             onClick={() => void handleMerchantLogout(true)}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl eco-btn-ghost text-sm font-bold"
+            className="inline-flex items-center gap-1.5 px-4 min-h-[48px] py-2.5 rounded-2xl eco-btn-ghost text-sm font-bold"
           >
             ← Inicio
           </button>
@@ -1175,7 +1189,7 @@ export default function PanelCaseritaPage() {
                   activeView === "configuracion" ? "principal" : "configuracion"
                 );
               }}
-              className={`px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-extrabold transition ${
+              className={`px-3.5 min-h-[48px] py-2.5 rounded-2xl text-xs sm:text-sm font-extrabold transition ${
                 activeView === "configuracion"
                   ? "bg-oro text-bosque shadow"
                   : "eco-btn-ghost"
@@ -1190,7 +1204,7 @@ export default function PanelCaseritaPage() {
             <button
               type="button"
               onClick={() => void handleMerchantLogout(false)}
-              className="px-3.5 py-2.5 rounded-xl eco-btn-danger text-xs sm:text-sm font-bold"
+              className="px-3.5 min-h-[48px] py-2.5 rounded-2xl eco-btn-danger text-xs sm:text-sm font-bold"
             >
               Salir
             </button>
@@ -1495,552 +1509,155 @@ export default function PanelCaseritaPage() {
               </div>
             </header>
 
-            {/* 2. PRIORIDAD 2: Puesto abierto o cerrado */}
-            <section
-              aria-label="Estado del puesto"
-              className={`rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 ${
-                isStoreOpen ? "eco-card-green" : "eco-card"
-              }`}
+            {/* Navegación simple en 2 pestañas grandes */}
+            <nav
+              aria-label="Secciones del puesto"
+              className="grid grid-cols-2 gap-2 p-1.5 rounded-2xl eco-inset"
             >
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-lg" aria-hidden="true">
-                    {isStoreOpen ? "🟢" : "🔴"}
-                  </span>
-                  <h2 className="font-brand text-lg sm:text-xl eco-text">
-                    {isStoreOpen ? "Puesto Abierto" : "Puesto Cerrado"}
-                  </h2>
-                </div>
-                <p className="text-xs sm:text-sm eco-text-muted">
-                  {isStoreOpen
-                    ? "Tus productos están visibles ahora en el Mercado del Barrio."
-                    : "Tu puesto está oculto temporalmente en el mercado."}
-                </p>
-              </div>
-
               <button
                 type="button"
-                disabled={isTogglingOpen}
-                onClick={handleToggleStoreOpen}
-                className={`px-5 py-3 rounded-xl font-extrabold text-sm transition active:scale-95 disabled:opacity-60 ${
-                  isStoreOpen
-                    ? "eco-btn-danger"
-                    : "bg-gradient-to-r from-brote to-[#5cd060] text-bosque shadow-green-glow"
+                onClick={() => setCaseritaTab("pedidos")}
+                className={`min-h-[56px] px-3 py-3 rounded-xl text-sm sm:text-base font-extrabold transition flex items-center justify-center gap-2 ${
+                  caseritaTab === "pedidos"
+                    ? "bg-gradient-to-r from-oro to-brillo text-bosque shadow"
+                    : "eco-text-muted hover:eco-text"
                 }`}
               >
-                {isTogglingOpen
-                  ? "Actualizando..."
-                  : isStoreOpen
-                  ? "Cerrar puesto"
-                  : "Abrir puesto"}
-              </button>
-            </section>
-
-            {/* 3. PRIORIDAD 3: Saldo en Bs (SOLO si tiene habilitada la billetera/libreta) */}
-            {merchant?.isLoggedIn && hasBsWalletEnabled ? (
-              <div className="space-y-2.5">
-                <PollarWalletSection
-                  role="merchant"
-                  userId={merchant.id}
-                  savedStellarAddress={merchant.stellar_address}
-                  savedPollarUserId={merchant.pollar_user_id}
-                  mode="profile-badge"
-                  compact
-                  balanceBs={merchant.fiatBs ?? 0}
-                  balanceMotes={currentMotes}
-                  rechargeAmountBs={SUBSCRIPTION_COST}
-                  rechargePurpose="fiat_topup"
-                  movementsHref="#mis-movimientos"
-                  movementsCount={myDeliveries.length}
-                  onOpenRecharge={() => setIsRampOpen(true)}
-                  onSynced={handleMerchantPollarSynced}
-                />
-
-                {pendingRampOrder && (
-                  <div className="rounded-xl eco-card-gold p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-                    <span className="font-bold eco-text-gold">
-                      ⏳ {getRechargeStatusLabel(pendingRampOrder.state)}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={isCheckingPendingRamp}
-                      onClick={handleCheckPendingRamp}
-                      className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-oro to-brillo text-bosque font-extrabold uppercase disabled:opacity-60"
-                    >
-                      {isCheckingPendingRamp
-                        ? "Verificando..."
-                        : "🔄 Verificar recarga"}
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              /* Sincronización silenciosa en segundo plano cuando aún está en plan gratuito */
-              merchant?.isLoggedIn && (
-                <PollarWalletSection
-                  role="merchant"
-                  userId={merchant.id}
-                  savedStellarAddress={merchant.stellar_address}
-                  savedPollarUserId={merchant.pollar_user_id}
-                  mode="auth-entry"
-                  onSynced={handleMerchantPollarSynced}
-                />
-              )
-            )}
-
-            {/* 4. PRIORIDAD 4: Información de plan gratuito y barra de estado rumbo a Caserita Aliada */}
-            {!merchant?.isProsumer ? (
-              <section
-                aria-label="Plan gratuito rumbo a Caserita Aliada"
-                className="rounded-2xl eco-card-gold p-5 space-y-3"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="px-2.5 py-1 rounded-full eco-alert-success text-xs font-extrabold uppercase">
-                    🌱 Plan Gratuito
-                  </span>
-                  <span className="font-brand text-lg eco-text-gold">
-                    {currentMotes} / {SUBSCRIPTION_COST} MOTES
-                  </span>
-                </div>
-
-                <div className="w-full h-3.5 rounded-full eco-inset overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-brote via-oro to-brillo transition-all duration-500"
-                    style={{ width: `${motesProgressPct}%` }}
-                  />
-                </div>
-
-                <p className="text-sm eco-text leading-snug">
-                  Rumbo a{" "}
-                  <strong className="eco-text-gold">Caserita Aliada</strong>:
-                  llevas <strong>{currentMotes}</strong> de{" "}
-                  <strong>100 MOTES</strong> en ventas. Al llegar a 100
-                  desbloqueas gratis tu{" "}
-                  <strong className="eco-text-green">
-                    cobro directo a QR bancario + 5 envíos ecológicos
-                  </strong>
-                  .
-                </p>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveView("configuracion")}
-                  className="text-xs font-extrabold eco-text-gold underline"
+                <span>📦 Mis Pedidos</span>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-xs font-extrabold ${
+                    activeOrdersCount > 0
+                      ? "bg-brote text-bosque"
+                      : "bg-oro/20 eco-text-gold"
+                  }`}
                 >
-                  ¿Quieres activar Caserita Aliada hoy? Ver en Configuración →
-                </button>
-              </section>
-            ) : (
-              <section
-                aria-label="Plan Caserita Aliada"
-                className="rounded-2xl eco-card-green p-4 flex flex-wrap items-center justify-between gap-2"
-              >
-                <div>
-                  <span className="text-xs font-extrabold uppercase eco-text-green block">
-                    ⭐ Caserita Aliada Activa
-                  </span>
-                  <p className="text-xs eco-text-muted">
-                    🚲{" "}
-                    {merchant?.free_deliveries_remaining ??
-                      merchant?.freeDeliveries ??
-                      0}{" "}
-                    envíos ecológicos disponibles ·{" "}
-                    {merchant?.bankQrUrl
-                      ? "✅ QR bancario listo"
-                      : "Sube tu QR en ⚙️ Configuración"}
-                  </p>
-                </div>
-              </section>
-            )}
+                  {activeOrdersCount > 0
+                    ? activeOrdersCount
+                    : myDeliveries.length}
+                </span>
+              </button>
 
-            {/* 5. PRIORIDAD 5: Subir y gestionar productos */}
-            <section
-              aria-label="Subir y gestionar productos"
-              className="space-y-4"
-            >
               <button
                 type="button"
-                onClick={openCreateModal}
-                className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-xl sm:text-2xl tracking-wide shadow-green-glow active:scale-[0.98] transition-all border-2 border-white/40"
+                onClick={() => setCaseritaTab("puesto")}
+                className={`min-h-[56px] px-3 py-3 rounded-xl text-sm sm:text-base font-extrabold transition flex items-center justify-center gap-2 ${
+                  caseritaTab === "puesto"
+                    ? "bg-gradient-to-r from-brote to-[#5cd060] text-bosque shadow"
+                    : "eco-text-muted hover:eco-text"
+                }`}
               >
-                + Subir Producto
+                <span>🏪 Vender / Mi Puesto</span>
+                <span className="px-2 py-0.5 rounded-full bg-bosque/15 dark:bg-bosque/40 text-xs font-extrabold">
+                  {myProducts.length}
+                </span>
               </button>
+            </nav>
 
-              <div className="space-y-3">
-                <h2 className="font-brand text-xl sm:text-2xl eco-text">
-                  Mis Productos ({myProducts.length})
-                </h2>
-
-                {isLoadingData && myProducts.length === 0 ? (
-                  <div className="h-32 rounded-2xl eco-inset animate-pulse" />
-                ) : myProducts.length === 0 ? (
-                  <div className="rounded-2xl eco-card p-7 text-center space-y-2">
-                    <div className="text-4xl">🧺</div>
-                    <p className="text-base font-bold eco-text">
-                      Todavía no subiste productos
-                    </p>
-                    <p className="text-sm eco-text-muted">
-                      Pulsa &ldquo;+ Subir Producto&rdquo;, saca una foto y pon
-                      tu precio en Bolivianos (Bs).
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {myProducts.map((item) => (
-                      <article
-                        key={item.id}
-                        className="rounded-2xl eco-card p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                      >
-                        <div className="flex items-center gap-3.5">
-                          <img
-                            src={item.imageUrl}
-                            alt={item.name}
-                            className="w-20 h-20 rounded-2xl object-cover border-2 border-oro/60 shrink-0"
-                          />
-                          <div className="space-y-0.5">
-                            <span className="font-brand text-2xl eco-text-gold block">
-                              {formatBs(item.priceMotes)}
-                            </span>
-                            <h3 className="font-brand text-lg eco-text leading-tight">
-                              {item.name}
-                            </h3>
-                            <p className="text-xs eco-text-muted line-clamp-2">
-                              {item.description}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center justify-end gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-oro/15 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(item)}
-                            className="px-4 py-2 rounded-xl eco-btn-ghost text-xs sm:text-sm font-extrabold"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteProduct(item.id)}
-                            className="px-4 py-2 rounded-xl eco-btn-danger text-xs sm:text-sm font-extrabold"
-                          >
-                            Quitar
-                          </button>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </section>
-
-            {/* Pedidos entrantes (solo aparece cuando hay pedidos para entregar) */}
-            {myDeliveries.length > 0 && (
-              <section
-                id="mis-movimientos"
-                aria-label="Pedidos para entregar"
-                className="rounded-2xl eco-card p-5 space-y-4"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <h2 className="font-brand text-xl eco-text">
-                    🚲 Pedidos para Entregar ({myDeliveries.length})
-                  </h2>
-                  <button
-                    type="button"
-                    disabled={isLoadingData}
-                    onClick={() => void loadProtectedMerchantData()}
-                    className="px-3 py-1.5 rounded-xl eco-btn-ghost text-xs font-bold disabled:opacity-60"
-                  >
-                    {isLoadingData ? "Actualizando..." : "🔄 Actualizar"}
-                  </button>
-                </div>
-
-                <div className="space-y-4">
-                  {myDeliveries.map((del) => {
-                    const order = orderById.get(del.order_id);
-                    const delStatus = getDeliveryStatusCopy(
-                      del.delivery_status
-                    );
-                    const protection = getPaymentProtectionCopy(
-                      order?.status,
-                      del.delivery_status
-                    );
-                    const orderAmount = Math.round(
-                      Number(del.amount_motes ?? order?.amount_motes ?? 0)
-                    );
-
-                    return (
-                      <article
-                        key={del.id}
-                        className="rounded-2xl eco-inset p-4 space-y-3"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-mono text-xs font-extrabold eco-text-gold">
-                                {formatOrderCode(
-                                  del.order_id ||
-                                    del.contract_id ||
-                                    order?.contract_id
-                                )}
-                              </span>
-                              <span className="px-2.5 py-0.5 rounded-full eco-alert-success text-xs font-extrabold uppercase">
-                                {delStatus.label}
-                              </span>
-                            </div>
-                            <h3 className="font-brand text-lg eco-text">
-                              {(del.quantity ?? 1) > 1
-                                ? `${del.quantity}x `
-                                : ""}
-                              {del.product_name}
-                            </h3>
-                            <p className="text-xs eco-text-muted">
-                              Vecino:{" "}
-                              <strong>{del.buyer_name || "Vecino"}</strong>
-                              {del.rider_name
-                                ? ` · Repartidor: ${del.rider_name}`
-                                : ""}
-                            </p>
-                            {del.special_notes && (
-                              <p className="text-xs font-semibold eco-card-gold rounded-lg px-2.5 py-1.5">
-                                📝 <strong>Nota del cliente:</strong>{" "}
-                                {del.special_notes}
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="text-right">
-                            <span className="font-brand text-xl eco-text-gold block">
-                              +{formatBs(orderAmount)}
-                            </span>
-                            <span
-                              className={`text-xs font-extrabold ${
-                                protection.isReleased
-                                  ? "eco-text-green"
-                                  : "eco-text-gold"
-                              }`}
-                            >
-                              {protection.sellerLabel}
-                            </span>
-                          </div>
-                        </div>
-
-                        <ProtectedPurchaseBar
-                          deliveryStatus={del.delivery_status}
-                          orderStatus={order?.status}
-                          amountBs={orderAmount}
+            {caseritaTab === "pedidos" ? (
+              <CaseritaOrdersTab
+                deliveries={myDeliveries}
+                orderById={orderById}
+                isLoading={isLoadingData}
+                onRefresh={() => void loadProtectedMerchantData()}
+              />
+            ) : (
+              merchant && (
+                <CaseritaStoreTab
+                  merchant={merchant}
+                  products={myProducts}
+                  isLoadingData={isLoadingData}
+                  isStoreOpen={isStoreOpen}
+                  isTogglingOpen={isTogglingOpen}
+                  currentMotes={currentMotes}
+                  subscriptionCost={SUBSCRIPTION_COST}
+                  motesProgressPct={motesProgressPct}
+                  onToggleStoreOpen={handleToggleStoreOpen}
+                  onOpenConfig={() => setActiveView("configuracion")}
+                  onOpenCreateProduct={openCreateModal}
+                  onOpenEditProduct={openEditModal}
+                  onDeleteProduct={handleDeleteProduct}
+                  libretaSlot={
+                    merchant.isLoggedIn && hasBsWalletEnabled ? (
+                      <div className="space-y-2.5">
+                        <PollarWalletSection
+                          role="merchant"
+                          userId={merchant.id}
+                          savedStellarAddress={merchant.stellar_address}
+                          savedPollarUserId={merchant.pollar_user_id}
+                          mode="profile-badge"
                           compact
+                          balanceBs={merchant.fiatBs ?? 0}
+                          balanceMotes={currentMotes}
+                          rechargeAmountBs={SUBSCRIPTION_COST}
+                          rechargePurpose="fiat_topup"
+                          movementsCount={myDeliveries.length}
+                          onViewMovements={() => setCaseritaTab("pedidos")}
+                          onOpenRecharge={() => setIsRampOpen(true)}
+                          onSynced={handleMerchantPollarSynced}
                         />
 
-                        <div className="rounded-2xl eco-pin-box border-2 border-oro p-3.5 text-center space-y-1">
-                          <span className="text-xs font-extrabold uppercase tracking-wider block">
-                            🔑 Código de recojo para el repartidor:
-                          </span>
-                          <span className="block font-mono text-4xl font-bold tracking-[0.2em] eco-pin-digits">
-                            {del.pickup_pin}
-                          </span>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              </section>
+                        {pendingRampOrder && (
+                          <div className="rounded-xl eco-card-gold p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <span className="font-bold eco-text-gold">
+                              ⏳ {getRechargeStatusLabel(pendingRampOrder.state)}
+                            </span>
+                            <button
+                              type="button"
+                              disabled={isCheckingPendingRamp}
+                              onClick={handleCheckPendingRamp}
+                              className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-oro to-brillo text-bosque font-extrabold uppercase disabled:opacity-60"
+                            >
+                              {isCheckingPendingRamp
+                                ? "Verificando..."
+                                : "🔄 Verificar recarga"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      merchant.isLoggedIn && (
+                        <PollarWalletSection
+                          role="merchant"
+                          userId={merchant.id}
+                          savedStellarAddress={merchant.stellar_address}
+                          savedPollarUserId={merchant.pollar_user_id}
+                          mode="auth-entry"
+                          onSynced={handleMerchantPollarSynced}
+                        />
+                      )
+                    )
+                  }
+                />
+              )
             )}
           </>
         )}
       </main>
 
-      {/* MODAL SUBIR / EDITAR PRODUCTO */}
-      {isModalOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
-        >
-          <div className="max-w-md w-full rounded-2xl eco-card p-5 sm:p-6 space-y-5 max-h-[92vh] overflow-y-auto">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="font-brand text-2xl eco-text">
-                {productStep === "preview"
-                  ? "¿Se ve bien tu producto?"
-                  : editingProduct
-                  ? "Editar Producto"
-                  : "Subir Producto"}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-                className="text-sm font-extrabold eco-text-muted hover:eco-text"
-              >
-                ✕ Cerrar
-              </button>
-            </div>
-
-            {productError && (
-              <div className="p-3.5 rounded-xl eco-alert-error text-sm font-bold">
-                ⚠️ {productError}
-              </div>
-            )}
-
-            {productStep === "edit" ? (
-              <form onSubmit={handleContinueToPreview} className="space-y-4">
-                <div className="rounded-2xl eco-inset p-4 space-y-2">
-                  <span className="block text-sm font-extrabold uppercase eco-text-gold">
-                    1. Foto del producto
-                  </span>
-                  <label className="block w-full rounded-2xl border-2 border-dashed border-oro/70 p-4 text-center cursor-pointer transition">
-                    {imageUrl ? (
-                      <div className="space-y-2">
-                        <img
-                          src={imageUrl}
-                          alt="Vista previa del producto"
-                          className="w-full h-44 object-cover rounded-xl mx-auto"
-                        />
-                        <span className="inline-block text-sm font-extrabold eco-text-gold">
-                          📷 Toca aquí para cambiar la foto
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="py-5 space-y-1.5">
-                        <div className="text-4xl">📸</div>
-                        <span className="block text-base font-extrabold eco-text-gold">
-                          {uploadingBucket === "product-images"
-                            ? "Optimizando foto..."
-                            : "Toca aquí para tomar o elegir foto"}
-                        </span>
-                      </div>
-                    )}
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file)
-                          uploadToBucket("product-images", file, setImageUrl);
-                      }}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
-
-                <div className="rounded-2xl eco-inset p-4 space-y-2">
-                  <label
-                    htmlFor="product-name-input"
-                    className="block text-sm font-extrabold uppercase eco-text-gold"
-                  >
-                    2. Nombre del producto
-                  </label>
-                  <input
-                    id="product-name-input"
-                    type="text"
-                    required
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Ej. Sopita de fideo, Pan casero..."
-                    className="w-full px-4 py-3.5 rounded-xl eco-input text-lg font-bold"
-                  />
-                  <input
-                    type="text"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Nota corta opcional (ej. con llajua, por docena)"
-                    className="w-full px-3.5 py-2.5 rounded-xl eco-input text-sm"
-                  />
-                </div>
-
-                <div className="rounded-2xl eco-inset p-4 space-y-2">
-                  <label
-                    htmlFor="product-price-input"
-                    className="block text-sm font-extrabold uppercase eco-text-gold"
-                  >
-                    3. Precio en Bolivianos (Bs)
-                  </label>
-                  <div className="relative flex items-center">
-                    <input
-                      id="product-price-input"
-                      ref={priceInputRef}
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      step={1}
-                      required
-                      value={priceMotes}
-                      onChange={(e) =>
-                        setPriceMotes(e.target.value.replace(/[^0-9]/g, ""))
-                      }
-                      placeholder="15"
-                      className="w-full pl-4 pr-16 py-4 rounded-xl eco-input font-brand text-3xl"
-                    />
-                    <span className="absolute right-4 font-brand text-2xl eco-text-gold">
-                      Bs
-                    </span>
-                  </div>
-                  <p className="text-xs font-bold eco-text-green">
-                    {COMMUNITY_COPY.zeroCommission} · {COMMUNITY_COPY.moteParity}
-                  </p>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={uploadingBucket === "product-images"}
-                  className="w-full py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-xl shadow-gold-glow active:scale-95 transition"
-                >
-                  Revisar antes de publicar →
-                </button>
-              </form>
-            ) : (
-              <div className="space-y-5">
-                <div className="rounded-2xl eco-card-gold overflow-hidden">
-                  {imageUrl && (
-                    <img
-                      src={imageUrl}
-                      alt={name}
-                      className="w-full h-52 object-cover border-b border-oro/20"
-                    />
-                  )}
-                  <div className="p-4 space-y-2">
-                    <span className="text-xs font-extrabold eco-text-green uppercase">
-                      🏪 {merchant?.storeName}
-                    </span>
-                    <h4 className="font-brand text-2xl eco-text">{name}</h4>
-                    {description.trim() && (
-                      <p className="text-sm eco-text-muted">{description}</p>
-                    )}
-                    <div className="pt-2 border-t border-oro/20 flex items-baseline justify-between">
-                      <span className="text-xs font-bold uppercase eco-text-muted">
-                        Precio para tus vecinos
-                      </span>
-                      <span className="font-brand text-3xl eco-text-gold">
-                        {formatBs(priceMotes)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-3">
-                  <button
-                    type="button"
-                    disabled={isSubmittingProduct}
-                    onClick={handleConfirmPublishProduct}
-                    className="w-full py-4 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-xl shadow-green-glow active:scale-95 transition"
-                  >
-                    {isSubmittingProduct
-                      ? "Guardando..."
-                      : "Publicar así"}
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={isSubmittingProduct}
-                    onClick={handleCorrectPrice}
-                    className="w-full py-3.5 rounded-2xl eco-btn-ghost font-extrabold text-base uppercase transition"
-                  >
-                    Corregir precio
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* MODAL SUBIR / EDITAR PRODUCTO EN 3 PASOS */}
+      <QuickProductModal
+        open={isModalOpen}
+        step={productStep}
+        isEditing={Boolean(editingProduct)}
+        storeName={merchant?.storeName || ""}
+        name={name}
+        priceMotes={priceMotes}
+        imageUrl={imageUrl}
+        compressedKb={lastCompressedKb}
+        isUploadingImage={uploadingBucket === "product-images"}
+        isSubmitting={isSubmittingProduct}
+        error={productError}
+        priceInputRef={priceInputRef}
+        onNameChange={setName}
+        onPriceChange={setPriceMotes}
+        onSelectFile={(file) =>
+          void uploadToBucket("product-images", file, setImageUrl)
+        }
+        onContinueToPreview={handleContinueToPreview}
+        onCorrectPrice={handleCorrectPrice}
+        onConfirmPublish={handleConfirmPublishProduct}
+        onClose={() => setIsModalOpen(false)}
+      />
 
       {/* Modal de recarga / activación con QR bancario */}
       <BankQrRechargeModal
