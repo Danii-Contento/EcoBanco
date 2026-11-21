@@ -1,28 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  applyNoStoreHeaders,
   applySessionCookie,
-  clearBuyerSession,
+  createEmptySession,
+  createExclusiveBuyerSession,
+  createExclusiveMerchantSession,
+  createExclusiveRiderSession,
   normalizeBolivianPhone,
   readSession,
-  withBuyerSession,
 } from "@/app/lib/session";
-import { createEmptyBuyer, db } from "@/app/lib/store";
+import { clearMerchantRuntimeCache, createEmptyBuyer, db } from "@/app/lib/store";
 import { RiderVehicleType } from "@/app/types/ecobanco";
 
 export async function GET(request: NextRequest) {
   try {
     const session = readSession(request);
     const state = await db.getSessionUsers(session);
-    return NextResponse.json({
-      buyer: state.buyer,
-      merchant: state.merchant,
-      rider: state.rider,
-      activeBuyerType: state.activeBuyerType,
-    });
+    return applyNoStoreHeaders(
+      NextResponse.json({
+        buyer: state.buyer,
+        merchant: state.merchant,
+        rider: state.rider,
+        activeBuyerType: state.activeBuyerType,
+      })
+    );
   } catch {
-    return NextResponse.json(
-      { error: "No se pudieron cargar los usuarios desde Supabase." },
-      { status: 500 }
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        { error: "No se pudieron cargar los usuarios desde Supabase." },
+        { status: 500 }
+      )
     );
   }
 }
@@ -93,71 +100,98 @@ export async function POST(request: NextRequest) {
         ? String(stellarAddress || "")
         : undefined;
 
-    if (action === "logout_all") {
+    if (
+      action === "logout_all" ||
+      action === "merchant_logout" ||
+      action === "buyer_logout" ||
+      action === "rider_logout"
+    ) {
+      clearMerchantRuntimeCache(session.merchantId);
       const res = NextResponse.json({
         buyer: createEmptyBuyer(),
         merchant: null,
         rider: null,
         activeBuyerType: "buyer" as const,
       });
-      return applySessionCookie(res, {});
+      return applySessionCookie(res, createEmptySession());
     }
 
     if (action === "merchant_toggle_open") {
       if (!session.merchantId) {
-        return NextResponse.json(
-          { error: "No hay sesión activa de comerciante." },
-          { status: 401 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: "No hay sesión activa de comerciante." },
+            { status: session.buyerId || session.riderId ? 403 : 401 }
+          )
         );
       }
       const result = await db.toggleMerchantOpen(session, Boolean(isOpen));
       if (!result.ok || !result.merchant) {
-        return NextResponse.json({ error: result.error }, { status: 400 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 400 })
+        );
       }
       const [state, merchantProducts] = await Promise.all([
         db.getSessionUsers(session),
         db.getProducts({ includeClosed: true, merchantId: session.merchantId }),
       ]);
-      return NextResponse.json({
-        message: result.merchant.isOpen
-          ? "Tu puesto ahora está ABIERTO y visible en el Mercado del Barrio."
-          : "Tu puesto ahora está CERRADO y oculto temporalmente en el Mercado del Barrio.",
-        buyer: state.buyer,
-        merchant: result.merchant,
-        products: merchantProducts,
-        activeBuyerType: state.activeBuyerType,
-      });
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          message: result.merchant.isOpen
+            ? "Tu puesto ahora está ABIERTO y visible en el Mercado del Barrio."
+            : "Tu puesto ahora está CERRADO y oculto temporalmente en el Mercado del Barrio.",
+          buyer: state.buyer,
+          merchant: result.merchant,
+          products: merchantProducts,
+          activeBuyerType: state.activeBuyerType,
+        })
+      );
     }
 
     if (action === "buyer_phone_login") {
       const normalizedPhone = normalizeBolivianPhone(String(phone || ""));
       if (!normalizedPhone) {
-        return NextResponse.json(
-          {
-            error:
-              "Ingresa tu número de WhatsApp de Bolivia (8 dígitos, ej. 76543210).",
-          },
-          { status: 400 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Ingresa tu número de WhatsApp de Bolivia (8 dígitos, ej. 76543210).",
+            },
+            { status: 400 }
+          )
         );
       }
       const result = await db.loginBuyerByPhone(normalizedPhone);
       if (!result.ok || !result.buyer) {
-        return NextResponse.json({ error: result.error }, { status: 404 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 404 })
+        );
       }
-      const nextSession = withBuyerSession(session, result.buyer.id);
+      clearMerchantRuntimeCache(session.merchantId);
+      const nextSession = createExclusiveBuyerSession(result.buyer.id);
       const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         buyer: result.buyer,
         merchant: state.merchant,
+        rider: state.rider,
         activeBuyerType: state.activeBuyerType,
       });
       return applySessionCookie(res, nextSession);
     }
 
     if (action === "merchant_register") {
-      const normalizedPhone =
-        normalizeBolivianPhone(String(phone || "")) ??
-        String(phone || "").replace(/\s+/g, "").trim();
+      const normalizedPhone = normalizeBolivianPhone(String(phone || ""));
+      if (!normalizedPhone) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Ingresa un número de WhatsApp de Bolivia válido (8 dígitos, ej. 76543210).",
+            },
+            { status: 400 }
+          )
+        );
+      }
       const result = await db.registerMerchant(
         String(ownerName || ""),
         String(storeName || ""),
@@ -170,14 +204,18 @@ export async function POST(request: NextRequest) {
       );
 
       if (!result.ok || !result.merchant) {
-        return NextResponse.json({ error: result.error }, { status: 400 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 400 })
+        );
       }
 
-      const nextSession = { ...session, merchantId: result.merchant.id };
+      clearMerchantRuntimeCache(session.merchantId);
+      const nextSession = createExclusiveMerchantSession(result.merchant.id);
       const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         buyer: state.buyer,
         merchant: result.merchant,
+        rider: state.rider,
         activeBuyerType: state.activeBuyerType,
       });
       return applySessionCookie(res, nextSession);
@@ -190,14 +228,18 @@ export async function POST(request: NextRequest) {
       );
 
       if (!result.ok || !result.merchant) {
-        return NextResponse.json({ error: result.error }, { status: 401 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 401 })
+        );
       }
 
-      const nextSession = { ...session, merchantId: result.merchant.id };
+      clearMerchantRuntimeCache(session.merchantId);
+      const nextSession = createExclusiveMerchantSession(result.merchant.id);
       const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         buyer: state.buyer,
         merchant: result.merchant,
+        rider: state.rider,
         activeBuyerType: state.activeBuyerType,
       });
       return applySessionCookie(res, nextSession);
@@ -205,9 +247,11 @@ export async function POST(request: NextRequest) {
 
     if (action === "merchant_update_settings") {
       if (!session.merchantId) {
-        return NextResponse.json(
-          { error: "No hay sesión activa de comerciante." },
-          { status: 401 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: "No hay sesión activa de comerciante." },
+            { status: session.buyerId || session.riderId ? 403 : 401 }
+          )
         );
       }
       const result = await db.updateMerchantSettings(session, {
@@ -222,27 +266,33 @@ export async function POST(request: NextRequest) {
       });
 
       if (!result.ok) {
-        return NextResponse.json({ error: result.error }, { status: 400 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 400 })
+        );
       }
 
       const [state, merchantProducts] = await Promise.all([
         db.getSessionUsers(session),
         db.getProducts({ includeClosed: true, merchantId: session.merchantId }),
       ]);
-      return NextResponse.json({
-        message: "Perfil actualizado correctamente.",
-        buyer: state.buyer,
-        merchant: result.merchant,
-        products: merchantProducts,
-        activeBuyerType: state.activeBuyerType,
-      });
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          message: "Perfil actualizado correctamente.",
+          buyer: state.buyer,
+          merchant: result.merchant,
+          products: merchantProducts,
+          activeBuyerType: state.activeBuyerType,
+        })
+      );
     }
 
     if (action === "merchant_upgrade_subscription") {
       if (!session.merchantId) {
-        return NextResponse.json(
-          { error: "No hay sesión activa de comerciante." },
-          { status: 401 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: "No hay sesión activa de comerciante." },
+            { status: session.buyerId || session.riderId ? 403 : 401 }
+          )
         );
       }
       const method: "motes" | "fiat" =
@@ -250,53 +300,46 @@ export async function POST(request: NextRequest) {
       const result = await db.upgradeMerchantSubscription(session, method);
 
       if (!result.ok) {
-        return NextResponse.json({ error: result.error }, { status: 400 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 400 })
+        );
       }
 
       const state = await db.getSessionUsers(session);
-      return NextResponse.json({
-        message:
-          method === "motes"
-            ? "¡Caserita Aliada activada con tus 100 MOTES de ventas! Tu cobro por QR bancario y 5 envíos ecológicos incluidos ya están activos."
-            : "¡Caserita Aliada activada con 100 Bs! Conservas todos tus MOTES y ya tienes activos tu cobro por QR bancario y 5 envíos ecológicos incluidos.",
-        buyer: state.buyer,
-        merchant: result.merchant,
-        activeBuyerType: state.activeBuyerType,
-      });
-    }
-
-    if (action === "merchant_logout") {
-      const nextSession = { ...session };
-      delete nextSession.merchantId;
-      if (nextSession.activeBuyerType === "merchant") {
-        nextSession.activeBuyerType = "buyer";
-      }
-      const state = await db.getSessionUsers(nextSession);
-      const res = NextResponse.json({
-        buyer: state.buyer,
-        merchant: state.merchant,
-        activeBuyerType: state.activeBuyerType,
-      });
-      return applySessionCookie(res, nextSession);
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          message:
+            method === "motes"
+              ? "¡Caserita Aliada activada con tus 100 MOTES de ventas! Tu cobro por QR bancario y 5 envíos ecológicos incluidos ya están activos."
+              : "¡Caserita Aliada activada con 100 Bs! Conservas todos tus MOTES y ya tienes activos tu cobro por QR bancario y 5 envíos ecológicos incluidos.",
+          buyer: state.buyer,
+          merchant: result.merchant,
+          activeBuyerType: state.activeBuyerType,
+        })
+      );
     }
 
     if (action === "quick_neighbor_login" || action === "lazy_login") {
       const cleanName = String(name || "").trim();
       if (!cleanName) {
-        return NextResponse.json(
-          { error: "Escribe tu nombre o apodo para continuar." },
-          { status: 400 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: "Escribe tu nombre o apodo para continuar." },
+            { status: 400 }
+          )
         );
       }
 
       const normalizedPhone = normalizeBolivianPhone(String(phone || ""));
       if (!normalizedPhone) {
-        return NextResponse.json(
-          {
-            error:
-              "Ingresa tu número de WhatsApp de Bolivia (8 dígitos, ej. 76543210).",
-          },
-          { status: 400 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Ingresa tu número de WhatsApp de Bolivia (8 dígitos, ej. 76543210).",
+            },
+            { status: 400 }
+          )
         );
       }
 
@@ -314,38 +357,42 @@ export async function POST(request: NextRequest) {
         stellarAddress: resolvedStellarAddress,
       });
       if (!result.ok || !result.buyer) {
-        return NextResponse.json({ error: result.error }, { status: 400 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 400 })
+        );
       }
-      const nextSession = withBuyerSession(session, result.buyer.id);
+      clearMerchantRuntimeCache(session.merchantId);
+      const nextSession = createExclusiveBuyerSession(result.buyer.id);
       const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         buyer: result.buyer,
         merchant: state.merchant,
-        activeBuyerType: state.activeBuyerType,
-      });
-      return applySessionCookie(res, nextSession);
-    }
-
-    if (action === "buyer_logout") {
-      const nextSession = clearBuyerSession(session);
-      const state = await db.getSessionUsers(nextSession);
-      const res = NextResponse.json({
-        buyer: state.buyer,
-        merchant: state.merchant,
+        rider: state.rider,
         activeBuyerType: state.activeBuyerType,
       });
       return applySessionCookie(res, nextSession);
     }
 
     if (action === "buyer_update_profile") {
+      if (!session.buyerId) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: "No hay sesión activa de comprador." },
+            { status: session.merchantId || session.riderId ? 403 : 401 }
+          )
+        );
+      }
+
       const normalizedPhone = normalizeBolivianPhone(String(phone || ""));
       if (!normalizedPhone) {
-        return NextResponse.json(
-          {
-            error:
-              "Ingresa tu número de WhatsApp de Bolivia (8 dígitos, ej. 76543210).",
-          },
-          { status: 400 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Ingresa tu número de WhatsApp de Bolivia (8 dígitos, ej. 76543210).",
+            },
+            { status: 400 }
+          )
         );
       }
 
@@ -359,20 +406,26 @@ export async function POST(request: NextRequest) {
         deliveryAddress: resolvedAddress,
       });
       if (!result.ok) {
-        return NextResponse.json({ error: result.error }, { status: 400 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 400 })
+        );
       }
       const state = await db.getSessionUsers(session);
-      return NextResponse.json({
-        message: "Datos de contacto y entrega actualizados.",
-        buyer: result.buyer,
-        merchant: state.merchant,
-        activeBuyerType: state.activeBuyerType,
-      });
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          message: "Datos de contacto y entrega actualizados.",
+          buyer: result.buyer,
+          merchant: state.merchant,
+          activeBuyerType: state.activeBuyerType,
+        })
+      );
     }
 
     if (action === "confirm_fiat_topup") {
       const result = await db.confirmFiatTopup();
-      return NextResponse.json({ error: result.error }, { status: 400 });
+      return applyNoStoreHeaders(
+        NextResponse.json({ error: result.error }, { status: 400 })
+      );
     }
 
     if (action === "confirm_ramp_topup") {
@@ -414,9 +467,11 @@ export async function POST(request: NextRequest) {
       });
 
       if (!result.ok) {
-        return NextResponse.json(
-          { error: result.error, duplicate: Boolean(result.duplicate) },
-          { status: result.duplicate ? 409 : 400 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: result.error, duplicate: Boolean(result.duplicate) },
+            { status: result.duplicate ? 409 : 400 }
+          )
         );
       }
 
@@ -429,14 +484,16 @@ export async function POST(request: NextRequest) {
           ? `¡Caserita Aliada activada con orden Pollar ${result.pollarOrderId}! Tu cobro directo a QR bancario y 5 envíos ecológicos están listos.`
           : `¡Recarga real de ${creditedRounded} Bs acreditada (Orden Pollar ${result.pollarOrderId})!`;
 
-      return NextResponse.json({
-        message: successMessage,
-        creditedBs: result.creditedBs,
-        pollarOrderId: result.pollarOrderId,
-        buyer: state.buyer,
-        merchant: state.merchant,
-        activeBuyerType: state.activeBuyerType,
-      });
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          message: successMessage,
+          creditedBs: result.creditedBs,
+          pollarOrderId: result.pollarOrderId,
+          buyer: state.buyer,
+          merchant: state.merchant,
+          activeBuyerType: state.activeBuyerType,
+        })
+      );
     }
 
     if (action === "pollar_login") {
@@ -455,18 +512,18 @@ export async function POST(request: NextRequest) {
       });
 
       if (!lookup.ok || !lookup.userRow) {
-        return NextResponse.json({ matched: false }, { status: 200 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ matched: false }, { status: 200 })
+        );
       }
 
-      const nextSession = { ...session };
-      if (targetRole === "merchant") {
-        nextSession.merchantId = lookup.userRow.id;
-      } else if (targetRole === "rider") {
-        nextSession.riderId = lookup.userRow.id;
-      } else {
-        nextSession.buyerId = lookup.userRow.id;
-        nextSession.activeBuyerType = "buyer";
-      }
+      clearMerchantRuntimeCache(session.merchantId);
+      const nextSession =
+        targetRole === "merchant"
+          ? createExclusiveMerchantSession(lookup.userRow.id)
+          : targetRole === "rider"
+          ? createExclusiveRiderSession(lookup.userRow.id)
+          : createExclusiveBuyerSession(lookup.userRow.id);
 
       const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
@@ -485,20 +542,36 @@ export async function POST(request: NextRequest) {
         String(password || body.pin || body.secret || "")
       );
       if (!result.ok || !result.rider) {
-        return NextResponse.json({ error: result.error }, { status: 401 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 401 })
+        );
       }
-      const nextSession = { ...session, riderId: result.rider.id };
-      const res = NextResponse.json({ rider: result.rider });
+      clearMerchantRuntimeCache(session.merchantId);
+      const nextSession = createExclusiveRiderSession(result.rider.id);
+      const res = NextResponse.json({
+        rider: result.rider,
+        buyer: createEmptyBuyer(),
+        merchant: null,
+      });
       return applySessionCookie(res, nextSession);
     }
 
     if (action === "rider_onboarding" || action === "rider_verify") {
+      const normalizedPhone = normalizeBolivianPhone(String(phone || ""));
+      if (!normalizedPhone) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Ingresa un número de WhatsApp de Bolivia válido (8 dígitos, ej. 76543210).",
+            },
+            { status: 400 }
+          )
+        );
+      }
       const resolvedVehicle: RiderVehicleType =
         vehicleType === "moto_electrica" ? "moto_electrica" : "bicicleta";
       const resolvedCiPhoto = String(ciPhotoUrl || ci_photo_url || "");
-      const normalizedPhone =
-        normalizeBolivianPhone(String(phone || "")) ??
-        String(phone || "").replace(/\s+/g, "").trim();
       const result = await db.registerOrUpdateRider({
         name: String(name || ""),
         phone: normalizedPhone,
@@ -512,9 +585,12 @@ export async function POST(request: NextRequest) {
         stellarAddress: resolvedStellarAddress,
       });
       if (!result.ok || !result.rider) {
-        return NextResponse.json({ error: result.error }, { status: 400 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 400 })
+        );
       }
-      const nextSession = { ...session, riderId: result.rider.id };
+      clearMerchantRuntimeCache(session.merchantId);
+      const nextSession = createExclusiveRiderSession(result.rider.id);
       const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         rider: result.rider,
@@ -525,46 +601,60 @@ export async function POST(request: NextRequest) {
       return applySessionCookie(res, nextSession);
     }
 
-    if (action === "rider_logout") {
-      const nextSession = { ...session };
-      delete nextSession.riderId;
-      const state = await db.getSessionUsers(nextSession);
-      const res = NextResponse.json({
-        rider: state.rider,
-        buyer: state.buyer,
-        merchant: state.merchant,
-        activeBuyerType: state.activeBuyerType,
-      });
-      return applySessionCookie(res, nextSession);
-    }
-
     if (action === "upgrade_prosumer") {
+      if (!session.buyerId) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: "Debes iniciar sesión como vecino para activar el Club Vecino." },
+            { status: session.merchantId || session.riderId ? 403 : 401 }
+          )
+        );
+      }
       const result = await db.upgradeBuyerProsumer(session);
       if (!result.ok) {
-        return NextResponse.json({ error: result.error }, { status: 400 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 400 })
+        );
       }
       const state = await db.getSessionUsers(session);
-      return NextResponse.json({
-        buyer: result.buyer,
-        merchant: state.merchant,
-        activeBuyerType: state.activeBuyerType,
-      });
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          buyer: result.buyer,
+          merchant: state.merchant,
+          activeBuyerType: state.activeBuyerType,
+        })
+      );
     }
 
     if (action === "referral_reward") {
-      return NextResponse.json(
-        {
-          error:
-            "Los bonos de referido solo se acreditan automáticamente cuando un usuario nuevo real se registra usando tu código de referido.",
-        },
-        { status: 400 }
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            error:
+              "Los bonos de referido solo se acreditan automáticamente cuando un usuario nuevo real se registra usando tu código de referido.",
+          },
+          { status: 400 }
+        )
       );
     }
 
     if (action === "set_buyer_type") {
       const nextType: "buyer" | "merchant" =
         buyerType === "merchant" ? "merchant" : "buyer";
-      const nextSession = { ...session, activeBuyerType: nextType };
+      if (nextType === "merchant" && !session.merchantId) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: "Solo una caserita autenticada puede cambiar al modo comerciante." },
+            { status: 403 }
+          )
+        );
+      }
+      const nextSession =
+        nextType === "merchant" && session.merchantId
+          ? createExclusiveMerchantSession(session.merchantId)
+          : session.buyerId
+          ? createExclusiveBuyerSession(session.buyerId)
+          : createEmptySession();
       const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         buyer: state.buyer,
@@ -587,23 +677,31 @@ export async function POST(request: NextRequest) {
       });
 
       if (!result.ok) {
-        return NextResponse.json({ error: result.error }, { status: 400 });
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: result.error }, { status: 400 })
+        );
       }
 
       const state = await db.getSessionUsers(session);
-      return NextResponse.json({
-        buyer: state.buyer,
-        merchant: state.merchant,
-        rider: state.rider,
-        activeBuyerType: state.activeBuyerType,
-      });
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          buyer: state.buyer,
+          merchant: state.merchant,
+          rider: state.rider,
+          activeBuyerType: state.activeBuyerType,
+        })
+      );
     }
 
-    return NextResponse.json({ error: "Acción no válida." }, { status: 400 });
+    return applyNoStoreHeaders(
+      NextResponse.json({ error: "Acción no válida." }, { status: 400 })
+    );
   } catch {
-    return NextResponse.json(
-      { error: "Error procesando la solicitud." },
-      { status: 500 }
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        { error: "Error procesando la solicitud." },
+        { status: 500 }
+      )
     );
   }
 }

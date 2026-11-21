@@ -1,45 +1,64 @@
 import { NextRequest, NextResponse } from "next/server";
-import { applySessionCookie, readSession } from "@/app/lib/session";
-import { db } from "@/app/lib/store";
+import {
+  applyNoStoreHeaders,
+  applySessionCookie,
+  createEmptySession,
+  createExclusiveRiderSession,
+  normalizeBolivianPhone,
+  readSession,
+} from "@/app/lib/session";
+import { clearMerchantRuntimeCache, db } from "@/app/lib/store";
+import { sanitizeUserError } from "@/app/lib/friendlyCopy";
 import { RiderVehicleType } from "@/app/types/ecobanco";
 
 export async function GET(request: NextRequest) {
   try {
     const session = readSession(request);
     if (!session.riderId && !session.merchantId) {
-      return NextResponse.json(
-        {
-          error: "Debes iniciar sesión para acceder a los pedidos y entregas.",
-          rider: null,
-          deliveries: [],
-          orders: [],
-        },
-        { status: 401 }
+      const status = session.buyerId ? 403 : 401;
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            error:
+              "Debes iniciar sesión para acceder a los pedidos y entregas.",
+            rider: null,
+            deliveries: [],
+            orders: [],
+          },
+          { status }
+        )
       );
     }
 
     const state = await db.getDeliveriesState(session);
     if (!state.authorized) {
-      return NextResponse.json(
-        {
-          error: "Debes iniciar sesión para acceder a los pedidos y entregas.",
-          rider: null,
-          deliveries: [],
-          orders: [],
-        },
-        { status: 401 }
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            error:
+              "Debes iniciar sesión para acceder a los pedidos y entregas.",
+            rider: null,
+            deliveries: [],
+            orders: [],
+          },
+          { status: 401 }
+        )
       );
     }
 
-    return NextResponse.json({
-      rider: state.rider,
-      deliveries: state.deliveries,
-      orders: state.orders,
-    });
+    return applyNoStoreHeaders(
+      NextResponse.json({
+        rider: state.rider,
+        deliveries: state.deliveries,
+        orders: state.orders,
+      })
+    );
   } catch {
-    return NextResponse.json(
-      { error: "No se pudieron cargar los envíos desde Supabase." },
-      { status: 500 }
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        { error: "No se pudieron cargar los envíos en este momento." },
+        { status: 500 }
+      )
     );
   }
 }
@@ -74,9 +93,15 @@ export async function POST(request: NextRequest) {
         String(password || pin || body.secret || "")
       );
       if (!result.ok || !result.rider) {
-        return NextResponse.json({ error: result.error }, { status: 401 });
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: sanitizeUserError(result.error) },
+            { status: 401 }
+          )
+        );
       }
-      const nextSession = { ...session, riderId: result.rider.id };
+      clearMerchantRuntimeCache(session.merchantId);
+      const nextSession = createExclusiveRiderSession(result.rider.id);
       const state = await db.getDeliveriesState(nextSession);
       const res = NextResponse.json({
         rider: result.rider,
@@ -87,12 +112,24 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "rider_onboarding") {
+      const normalizedPhone = normalizeBolivianPhone(String(phone || ""));
+      if (!normalizedPhone) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Ingresa un número de WhatsApp de Bolivia válido (8 dígitos, ej. 76543210).",
+            },
+            { status: 400 }
+          )
+        );
+      }
       const resolvedVehicle: RiderVehicleType =
         vehicleType === "moto_electrica" ? "moto_electrica" : "bicicleta";
       const resolvedCiPhoto = String(ciPhotoUrl || ci_photo_url || "");
       const result = await db.registerOrUpdateRider({
         name: String(name || ""),
-        phone: String(phone || ""),
+        phone: normalizedPhone,
         vehicleType: resolvedVehicle,
         address: String(address || ""),
         ciNumber: String(ciNumber || ""),
@@ -114,14 +151,20 @@ export async function POST(request: NextRequest) {
       });
 
       if (!result.ok || !result.rider) {
-        return NextResponse.json({ error: result.error }, { status: 400 });
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: sanitizeUserError(result.error) },
+            { status: 400 }
+          )
+        );
       }
 
-      const nextSession = { ...session, riderId: result.rider.id };
+      clearMerchantRuntimeCache(session.merchantId);
+      const nextSession = createExclusiveRiderSession(result.rider.id);
       const state = await db.getDeliveriesState(nextSession);
       const res = NextResponse.json({
         message:
-          "¡Ficha de Confianza verificada! Tu código único EcoDohmi y tus billeteras MOTES y FIAT/USDC ya están activos.",
+          "¡Ficha de Confianza verificada! Tu credencial oficial de repartidor ya está activa.",
         rider: result.rider,
         deliveries: state.deliveries,
         orders: state.orders,
@@ -130,45 +173,65 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "rider_logout") {
-      const nextSession = { ...session };
-      delete nextSession.riderId;
+      clearMerchantRuntimeCache(session.merchantId);
       const res = NextResponse.json({
         rider: null,
         deliveries: [],
         orders: [],
       });
-      return applySessionCookie(res, nextSession);
+      return applySessionCookie(res, createEmptySession());
     }
 
     if (action === "accept_delivery") {
       if (!session.riderId) {
-        return NextResponse.json(
-          { error: "Debes iniciar sesión como repartidor para tomar pedidos." },
-          { status: 401 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Debes iniciar sesión como repartidor para tomar pedidos.",
+            },
+            { status: session.buyerId || session.merchantId ? 403 : 401 }
+          )
         );
       }
       const result = await db.acceptDelivery(session, String(deliveryId || ""));
       if (!result.ok) {
-        const statusCode = result.error?.includes("rider_verified") ? 403 : 400;
-        return NextResponse.json({ error: result.error }, { status: statusCode });
+        const statusCode = result.conflict
+          ? 409
+          : result.forbidden
+          ? 403
+          : 400;
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: sanitizeUserError(result.error) },
+            { status: statusCode }
+          )
+        );
       }
 
       const state = await db.getDeliveriesState(session);
-      return NextResponse.json({
-        message:
-          "Pedido asignado. Dirígete al puesto de la caserita y valida el PIN de recojo.",
-        delivery: result.delivery,
-        rider: state.rider,
-        deliveries: state.deliveries,
-        orders: state.orders,
-      });
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          message:
+            "Pedido asignado. Dirígete al puesto de la caserita y pídele el código de 4 números.",
+          delivery: result.delivery,
+          rider: state.rider,
+          deliveries: state.deliveries,
+          orders: state.orders,
+        })
+      );
     }
 
     if (action === "validate_pickup") {
       if (!session.riderId) {
-        return NextResponse.json(
-          { error: "Debes iniciar sesión como repartidor para validar recojos." },
-          { status: 401 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Debes iniciar sesión como repartidor para validar recojos.",
+            },
+            { status: session.buyerId || session.merchantId ? 403 : 401 }
+          )
         );
       }
       const result = await db.validatePickupPin(
@@ -177,26 +240,42 @@ export async function POST(request: NextRequest) {
         String(pin || "")
       );
       if (!result.ok) {
-        const statusCode = result.error?.includes("rider_verified") ? 403 : 400;
-        return NextResponse.json({ error: result.error }, { status: statusCode });
+        const statusCode = result.conflict
+          ? 409
+          : result.forbidden
+          ? 403
+          : 400;
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: sanitizeUserError(result.error) },
+            { status: statusCode }
+          )
+        );
       }
 
       const state = await db.getDeliveriesState(session);
-      return NextResponse.json({
-        message:
-          "¡Recojo validado! El pedido ahora está En Tránsito hacia el vecino.",
-        delivery: result.delivery,
-        rider: state.rider,
-        deliveries: state.deliveries,
-        orders: state.orders,
-      });
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          message:
+            "¡Recojo validado! El pedido ahora está en camino hacia el vecino.",
+          delivery: result.delivery,
+          rider: state.rider,
+          deliveries: state.deliveries,
+          orders: state.orders,
+        })
+      );
     }
 
     if (action === "validate_delivery") {
       if (!session.riderId) {
-        return NextResponse.json(
-          { error: "Debes iniciar sesión como repartidor para confirmar entregas." },
-          { status: 401 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Debes iniciar sesión como repartidor para confirmar entregas.",
+            },
+            { status: session.buyerId || session.merchantId ? 403 : 401 }
+          )
         );
       }
       const result = await db.validateDeliveryPin(
@@ -205,27 +284,38 @@ export async function POST(request: NextRequest) {
         String(pin || "")
       );
       if (!result.ok) {
-        const statusCode = result.error?.includes("rider_verified") ? 403 : 400;
-        return NextResponse.json({ error: result.error }, { status: statusCode });
+        const statusCode = result.forbidden ? 403 : 400;
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: sanitizeUserError(result.error) },
+            { status: statusCode }
+          )
+        );
       }
 
       const state = await db.getDeliveriesState(session);
-      return NextResponse.json({
-        message:
-          "¡Entrega confirmada! Escrow liberado a la caserita y tarifa acreditada a tu billetera EcoDohmi.",
-        delivery: result.delivery,
-        order: result.order,
-        rider: state.rider,
-        deliveries: state.deliveries,
-        orders: state.orders,
-      });
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          message:
+            "¡Entrega confirmada! El pago pasó a la caserita y tu ganancia ya está en tu libreta.",
+          delivery: result.delivery,
+          order: result.order,
+          rider: state.rider,
+          deliveries: state.deliveries,
+          orders: state.orders,
+        })
+      );
     }
 
-    return NextResponse.json({ error: "Acción no válida." }, { status: 400 });
-  } catch {
-    return NextResponse.json(
-      { error: "Error procesando la operación de EcoDohmi." },
-      { status: 500 }
+    return applyNoStoreHeaders(
+      NextResponse.json({ error: "Acción no válida." }, { status: 400 })
+    );
+  } catch (err) {
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        { error: sanitizeUserError(err) },
+        { status: 500 }
+      )
     );
   }
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readSession } from "@/app/lib/session";
+import { applyNoStoreHeaders, readSession } from "@/app/lib/session";
 import { db } from "@/app/lib/store";
 import { sanitizeUserError } from "@/app/lib/friendlyCopy";
 
@@ -21,10 +21,22 @@ export async function POST(request: NextRequest) {
     } = body;
 
     if (action === "release") {
-      const releaseResult = await db.releaseEscrow(session, {
+      if (!session.buyerId && !session.merchantId) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Solo el comprador dueño del pedido puede liberar el Pago Protegido desde aquí.",
+            },
+            { status: session.riderId ? 403 : 401 }
+          )
+        );
+      }
+
+      const releaseResult = await db.releaseEscrowByBuyer(session, {
         deliveryId: deliveryId ? String(deliveryId) : undefined,
         orderId: orderId ? String(orderId) : undefined,
-        deliveryPin: String(deliveryPin || ""),
+        deliveryPin: deliveryPin ? String(deliveryPin) : undefined,
       });
 
       if (!releaseResult.ok) {
@@ -33,12 +45,12 @@ export async function POST(request: NextRequest) {
           deliveryId: deliveryId ?? null,
           error: releaseResult.error,
         });
-        const statusCode = releaseResult.error?.includes("rider_verified")
-          ? 403
-          : 400;
-        return NextResponse.json(
-          { error: sanitizeUserError(releaseResult.error) },
-          { status: statusCode }
+        const statusCode = releaseResult.forbidden ? 403 : 400;
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: sanitizeUserError(releaseResult.error) },
+            { status: statusCode }
+          )
         );
       }
 
@@ -64,31 +76,53 @@ export async function POST(request: NextRequest) {
       });
 
       const state = await db.getState(session);
-      return NextResponse.json(
-        {
-          message:
-            "Pago Protegido entregado con éxito. Fondos acreditados a la caserita y tarifa acreditada al repartidor.",
-          delivery: releaseResult.delivery,
-          order: releaseResult.order,
-          rider: releaseResult.rider,
-          buyer: state.buyer,
-          merchant: state.merchant,
-        },
-        { status: 200 }
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            message:
+              "Pago Protegido entregado con éxito. Fondos acreditados a la caserita y tarifa acreditada al repartidor.",
+            delivery: releaseResult.delivery,
+            order: releaseResult.order,
+            rider: releaseResult.rider,
+            buyer: state.buyer,
+            merchant: state.merchant,
+          },
+          { status: 200 }
+        )
+      );
+    }
+
+    const resolvedBuyerType: "buyer" | "merchant" =
+      buyerType === "merchant" ? "merchant" : "buyer";
+
+    if (resolvedBuyerType === "merchant" && !session.merchantId) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { error: "Debes iniciar sesión como caserita para usar tu saldo de puesto." },
+          { status: session.buyerId || session.riderId ? 403 : 401 }
+        )
+      );
+    }
+    if (resolvedBuyerType === "buyer" && !session.buyerId) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { error: "Completa tus datos de entrega antes de confirmar tu pedido." },
+          { status: session.merchantId || session.riderId ? 403 : 401 }
+        )
       );
     }
 
     const products = await db.getProducts({ includeClosed: true });
     const product = products.find((p) => p.id === productId);
     if (!product) {
-      return NextResponse.json(
-        { error: "El producto seleccionado no existe." },
-        { status: 404 }
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { error: "El producto seleccionado no existe." },
+          { status: 404 }
+        )
       );
     }
 
-    const resolvedBuyerType: "buyer" | "merchant" =
-      buyerType === "merchant" ? "merchant" : "buyer";
     const resolvedMethod: "fiat" | "motes" | undefined =
       paymentMethod === "fiat" || paymentMethod === "motes"
         ? paymentMethod
@@ -113,13 +147,15 @@ export async function POST(request: NextRequest) {
         buyerType: resolvedBuyerType,
         error: result.error,
       });
-      return NextResponse.json(
-        {
-          error: sanitizeUserError(result.error),
-          buyer: state.buyer,
-          merchant: state.merchant,
-        },
-        { status: 400 }
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            error: sanitizeUserError(result.error),
+            buyer: state.buyer,
+            merchant: state.merchant,
+          },
+          { status: 400 }
+        )
       );
     }
 
@@ -134,21 +170,33 @@ export async function POST(request: NextRequest) {
         result.order?.fund_tx_hash ?? result.receipt?.fundTxHash ?? null,
     });
 
-    return NextResponse.json(
-      {
-        receipt: result.receipt,
-        order: result.order,
-        delivery: result.delivery,
-        buyer: state.buyer,
-        merchant: state.merchant,
-      },
-      { status: 201 }
+    // Redactar el PIN secreto de recojo (solo para la caserita) de la respuesta del comprador
+    const safeReceipt = result.receipt
+      ? { ...result.receipt, pickupPin: undefined }
+      : undefined;
+    const safeDelivery = result.delivery
+      ? { ...result.delivery, pickup_pin: "" }
+      : undefined;
+
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          receipt: safeReceipt,
+          order: result.order,
+          delivery: safeDelivery,
+          buyer: state.buyer,
+          merchant: state.merchant,
+        },
+        { status: 201 }
+      )
     );
   } catch (err) {
     console.error("[EcoBanco Escrow Audit][UNHANDLED_ERROR]", err);
-    return NextResponse.json(
-      { error: sanitizeUserError(err) },
-      { status: 500 }
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        { error: sanitizeUserError(err) },
+        { status: 500 }
+      )
     );
   }
 }

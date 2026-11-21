@@ -19,6 +19,7 @@ import {
 import {
   disconnectProfileSession,
   isPageReloadNavigation,
+  purgeClientSessionStorage,
   useDisconnectOnPageUnload,
 } from "@/app/lib/useDisconnectOnReload";
 import { PollarWalletSection } from "@/app/components/PollarWalletSection";
@@ -95,12 +96,15 @@ export default function PanelRiderPage() {
   }, []);
 
   const resetToLoginState = useCallback(() => {
+    purgeClientSessionStorage();
     setRider(null);
     setDeliveries([]);
     setOrders([]);
     setPinInputs({});
     setSelfieKb(null);
     setCiKb(null);
+    setFeedbackMsg(null);
+    setFeedbackError(null);
     setShowSettings(false);
     setAuthTab("login");
     setAuthStatus("unauthenticated");

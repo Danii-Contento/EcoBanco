@@ -34,7 +34,10 @@ import {
   normalizeBolivianPhone,
   sanitizeLocalPhoneInput,
 } from "@/app/lib/phone";
-import { disconnectProfileSession } from "@/app/lib/useDisconnectOnReload";
+import {
+  disconnectProfileSession,
+  purgeClientSessionStorage,
+} from "@/app/lib/useDisconnectOnReload";
 import { ProtectedPurchaseBar } from "@/app/components/ProtectedPurchaseBar";
 import { OnChainEscrowAuditLinks } from "@/app/components/OnChainEscrowAuditLinks";
 import {
@@ -407,12 +410,24 @@ export default function PerfilUsuarioPage() {
 
   const handleBuyerLogout = async (redirectHome = false) => {
     skipAutoPollarLoginRef.current = true;
+    pollarLookupKeyRef.current = "";
     await disconnectProfileSession(
       redirectHome ? "logout_all" : "buyer_logout",
       pollarLogout
     );
+    purgeClientSessionStorage();
     setBuyer(null);
+    setPollarDraft({});
     setPendingRampOrder(null);
+    setUpgradeBanner(null);
+    setUpgradeError(null);
+    setPaymentFeedback(null);
+    setPaymentError(null);
+    setContactMsg(null);
+    setContactError(null);
+    setNameInput("");
+    setPhoneDigitsInput("");
+    setDeliveryAddressInput("");
     setActiveView("principal");
     if (redirectHome) {
       router.push("/");

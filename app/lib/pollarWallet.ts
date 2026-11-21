@@ -47,6 +47,13 @@ const inFlightProvisionByClient = new WeakMap<
 >();
 const inFlightSyncByTarget = new Map<string, Promise<PollarSyncResult>>();
 
+/**
+ * Limpia cachés en memoria de sincronización de billeteras al cerrar o cambiar de sesión.
+ */
+export function clearPollarWalletRuntimeCaches(): void {
+  inFlightSyncByTarget.clear();
+}
+
 export function isValidClassicStellarAddress(
   address?: string | null
 ): address is string {

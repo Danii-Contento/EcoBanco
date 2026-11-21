@@ -1,12 +1,40 @@
 "use client";
 
 import { useEffect } from "react";
+import { clearPollarWalletRuntimeCaches } from "./pollarWallet";
 
 export type DisconnectAction =
   | "merchant_logout"
   | "buyer_logout"
   | "rider_logout"
   | "logout_all";
+
+const THEME_STORAGE_KEY = "ecobanco_theme";
+
+/**
+ * Purga por completo localStorage, sessionStorage y cachés en memoria de sesión
+ * preservando únicamente la preferencia visual de tema (Ajayu Día / Modo Noche).
+ */
+export function purgeClientSessionStorage(): void {
+  clearPollarWalletRuntimeCaches();
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.clear();
+  } catch {
+    // ignore sessionStorage errors
+  }
+
+  try {
+    const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    window.localStorage.clear();
+    if (savedTheme === "light" || savedTheme === "dark") {
+      window.localStorage.setItem(THEME_STORAGE_KEY, savedTheme);
+    }
+  } catch {
+    // ignore localStorage errors
+  }
+}
 
 export function isPageReloadNavigation(): boolean {
   if (typeof window === "undefined" || typeof performance === "undefined") {
@@ -40,6 +68,8 @@ export async function disconnectProfileSession(
       // ignore silent logout errors
     }
   }
+
+  purgeClientSessionStorage();
 }
 
 /**
@@ -54,6 +84,7 @@ export function useDisconnectOnPageUnload(
     if (!active || typeof window === "undefined") return;
 
     const sendDisconnectBeacon = () => {
+      purgeClientSessionStorage();
       try {
         const blob = new Blob([JSON.stringify({ action })], {
           type: "application/json",

@@ -8,7 +8,11 @@ import {
   User,
 } from "../types/ecobanco";
 import { EcoBancoSession } from "./session";
-import { areSameBolivianPhone, normalizeBolivianPhone } from "./phone";
+import {
+  areSameBolivianPhone,
+  isValidBolivianPhone,
+  normalizeBolivianPhone,
+} from "./phone";
 import {
   SUPABASE_BUCKETS,
   SupabaseProductRow,
@@ -46,6 +50,14 @@ const processedRampKeys: Set<string> =
 const merchantOpenOverrides: Map<string, boolean> =
   globalRampStore.ecoBancoMerchantOpenOverrides ??
   (globalRampStore.ecoBancoMerchantOpenOverrides = new Map<string, boolean>());
+
+export function clearMerchantRuntimeCache(merchantId?: string): void {
+  if (merchantId) {
+    merchantOpenOverrides.delete(merchantId);
+    return;
+  }
+  merchantOpenOverrides.clear();
+}
 
 function stripClosedMarker(text?: string | null): string {
   return (text || "").replace(/\s*\[\[ECO_CLOSED\]\]\s*/g, "").trim();
@@ -238,7 +250,8 @@ function normalizeDeliveryStatus(
 function mapOrderToTransaction(
   order: Order,
   delivery?: Delivery,
-  buyerName?: string
+  buyerName?: string,
+  options?: { includePickupPin?: boolean }
 ): EscrowTransaction {
   const meta = parseOrderProductMeta(
     order.product_name,
@@ -267,7 +280,7 @@ function mapOrderToTransaction(
     deliveryStatus: delivery
       ? normalizeDeliveryStatus(delivery.delivery_status)
       : "pending",
-    pickupPin: delivery?.pickup_pin,
+    pickupPin: options?.includePickupPin ? delivery?.pickup_pin : undefined,
     deliveryPin: delivery?.delivery_pin,
     usedFreeDelivery: delivery?.used_free_delivery,
     subsidizedByReserve: delivery?.subsidized_by_reserve,
@@ -657,11 +670,15 @@ export class SupabaseEcoBancoRepository {
       const merchant = users.find(
         (u) => u.role === "merchant" && u.id === options.merchantId
       );
-      const merchantStoreLower = (merchant?.store_name || "").toLowerCase();
+      if (!merchant) {
+        return [];
+      }
+      const merchantStoreLower = (merchant.store_name || "").toLowerCase();
       mapped = mapped.filter(
         (p) =>
           p.sellerId === options.merchantId ||
-          (merchantStoreLower &&
+          (!p.sellerId &&
+            merchantStoreLower &&
             p.sellerName.toLowerCase() === merchantStoreLower)
       );
     }
@@ -681,8 +698,20 @@ export class SupabaseEcoBancoRepository {
   ): Promise<{ ok: boolean; error?: string; merchant?: User }> {
     const cleanOwner = ownerName.trim();
     const cleanStore = storeName.trim();
-    const cleanPhone =
-      normalizeBolivianPhone(phone) ?? phone.replace(/\s+/g, "").trim();
+    const cleanPhone = normalizeBolivianPhone(phone);
+    if (!cleanOwner || !cleanStore || !phone.trim()) {
+      return {
+        ok: false,
+        error: "Debes completar los 3 datos para crear tu cuenta.",
+      };
+    }
+    if (!cleanPhone) {
+      return {
+        ok: false,
+        error:
+          "Ingresa un número de WhatsApp de Bolivia válido (8 dígitos, ej. 76543210).",
+      };
+    }
     const cleanPass = (password || "").trim() || cleanPhone;
     const cleanPollarUserId = pollar?.pollarUserId?.trim() || null;
     const cleanStellarAddress =
@@ -690,13 +719,6 @@ export class SupabaseEcoBancoRepository {
       STELLAR_CLASSIC_ACCOUNT_REGEX.test(pollar.stellarAddress.trim())
         ? pollar.stellarAddress.trim()
         : null;
-
-    if (!cleanOwner || !cleanStore || !cleanPhone) {
-      return {
-        ok: false,
-        error: "Debes completar los 3 datos para crear tu cuenta.",
-      };
-    }
 
     const users = await supabaseTables.listUsers();
     const exists = users.find(
@@ -801,7 +823,13 @@ export class SupabaseEcoBancoRepository {
       };
     }
 
-    if (found.password !== cleanPass) {
+    const passwordMatches =
+      found.password === cleanPass ||
+      (Boolean(found.password) &&
+        isValidBolivianPhone(found.password) &&
+        areSameBolivianPhone(found.password, cleanPass));
+
+    if (!passwordMatches) {
       return {
         ok: false,
         error: "Contraseña incorrecta.",
@@ -1057,9 +1085,7 @@ export class SupabaseEcoBancoRepository {
   }): Promise<{ ok: boolean; error?: string; buyer?: User }> {
     const cleanName = (input.name || "").trim();
     const cleanEmail = (input.email || "").trim().toLowerCase();
-    const cleanPhone =
-      normalizeBolivianPhone(input.phone) ??
-      (input.phone || "").replace(/\s+/g, "").trim();
+    const cleanPhone = normalizeBolivianPhone(input.phone);
     const cleanAddress = (input.deliveryAddress || "").trim();
     const cleanReferralCode = (input.referralCode || "").trim().toUpperCase();
     const cleanPollarUserId = input.pollarUserId?.trim() || null;
@@ -1069,11 +1095,19 @@ export class SupabaseEcoBancoRepository {
         ? input.stellarAddress.trim()
         : null;
 
-    if (!cleanName || !cleanPhone) {
+    if (!cleanName || !input.phone?.trim()) {
       return {
         ok: false,
         error:
           "Escribe tu nombre o apodo y tu número de WhatsApp para continuar.",
+      };
+    }
+
+    if (!cleanPhone) {
+      return {
+        ok: false,
+        error:
+          "Ingresa un número de WhatsApp de Bolivia válido (8 dígitos, ej. 76543210).",
       };
     }
 
@@ -1221,10 +1255,13 @@ export class SupabaseEcoBancoRepository {
   public async loginBuyerByPhone(
     phone: string
   ): Promise<{ ok: boolean; error?: string; buyer?: User }> {
-    const cleanPhone =
-      normalizeBolivianPhone(phone) ?? (phone || "").replace(/\s+/g, "").trim();
+    const cleanPhone = normalizeBolivianPhone(phone);
     if (!cleanPhone) {
-      return { ok: false, error: "Escribe tu número de WhatsApp." };
+      return {
+        ok: false,
+        error:
+          "Ingresa un número de WhatsApp de Bolivia válido (8 dígitos, ej. 76543210).",
+      };
     }
 
     const [users, orders, deliveries] = await Promise.all([
@@ -1267,16 +1304,14 @@ export class SupabaseEcoBancoRepository {
       return { ok: false, error: "No hay sesión activa de comprador." };
     }
 
-    const cleanPhone =
-      normalizeBolivianPhone(input.phone) ??
-      (input.phone || "").replace(/\s+/g, "").trim();
+    const cleanPhone = normalizeBolivianPhone(input.phone);
     const cleanAddress = (input.deliveryAddress || "").trim();
 
     if (!cleanPhone || !cleanAddress) {
       return {
         ok: false,
         error:
-          "El número de WhatsApp y la dirección de entrega son obligatorios.",
+          "Un número de WhatsApp válido de Bolivia (8 dígitos) y la dirección de entrega son obligatorios.",
       };
     }
 
@@ -1792,10 +1827,16 @@ export class SupabaseEcoBancoRepository {
     session: EcoBancoSession,
     id: string,
     patch: Partial<Product>
-  ): Promise<{ ok: boolean; error?: string; product?: Product | null }> {
+  ): Promise<{
+    ok: boolean;
+    forbidden?: boolean;
+    error?: string;
+    product?: Product | null;
+  }> {
     if (!session.merchantId) {
       return {
         ok: false,
+        forbidden: true,
         error: "Debes iniciar sesión como caserita para editar productos.",
       };
     }
@@ -1804,13 +1845,25 @@ export class SupabaseEcoBancoRepository {
       supabaseTables.listProducts(),
       supabaseTables.listUsers(),
     ]);
+    const activeMer = users.find(
+      (u) => u.role === "merchant" && u.id === session.merchantId
+    );
+    if (!activeMer) {
+      return {
+        ok: false,
+        forbidden: true,
+        error: "Sesión de caserita no válida.",
+      };
+    }
+
     const existing = products.find((p) => p.id === id);
     if (!existing) {
       return { ok: false, error: "Producto no encontrado." };
     }
-    if (existing.seller_id && existing.seller_id !== session.merchantId) {
+    if (!existing.seller_id || existing.seller_id !== activeMer.id) {
       return {
         ok: false,
+        forbidden: true,
         error: "Solo puedes editar productos de tu propio puesto.",
       };
     }
@@ -1843,22 +1896,38 @@ export class SupabaseEcoBancoRepository {
   public async removeProduct(
     session: EcoBancoSession,
     id: string
-  ): Promise<{ ok: boolean; error?: string }> {
+  ): Promise<{ ok: boolean; forbidden?: boolean; error?: string }> {
     if (!session.merchantId) {
       return {
         ok: false,
+        forbidden: true,
         error: "Debes iniciar sesión como caserita para eliminar productos.",
       };
     }
 
-    const products = await supabaseTables.listProducts();
+    const [products, users] = await Promise.all([
+      supabaseTables.listProducts(),
+      supabaseTables.listUsers(),
+    ]);
+    const activeMer = users.find(
+      (u) => u.role === "merchant" && u.id === session.merchantId
+    );
+    if (!activeMer) {
+      return {
+        ok: false,
+        forbidden: true,
+        error: "Sesión de caserita no válida.",
+      };
+    }
+
     const existing = products.find((p) => p.id === id);
     if (!existing) {
       return { ok: false, error: "Producto no encontrado." };
     }
-    if (existing.seller_id && existing.seller_id !== session.merchantId) {
+    if (!existing.seller_id || existing.seller_id !== activeMer.id) {
       return {
         ok: false,
+        forbidden: true,
         error: "Solo puedes eliminar productos de tu propio puesto.",
       };
     }
@@ -1940,6 +2009,13 @@ export class SupabaseEcoBancoRepository {
       return {
         ok: false,
         error: "Completa tus datos de entrega antes de confirmar tu pedido.",
+      };
+    }
+
+    if (sellerAccount && sellerAccount.id === activeBuyer.id) {
+      return {
+        ok: false,
+        error: "No puedes comprar productos de tu propio puesto.",
       };
     }
 
@@ -2238,21 +2314,31 @@ export class SupabaseEcoBancoRepository {
     const enriched = enrichDeliveriesWithContext(rawDeliveries, orders, users);
     const merchantStoreLower = (merchantRow?.store_name || "").toLowerCase();
 
-    const filteredDeliveries = enriched.filter((d) => {
-      const allowedForRider = Boolean(
-        riderRow &&
-          ((normalizeDeliveryStatus(d.delivery_status) === "pending" &&
-            !d.rider_id) ||
-            d.rider_id === riderRow.id)
-      );
-      const allowedForMerchant = Boolean(
-        merchantRow &&
-          (d.seller_id === merchantRow.id ||
-            (merchantStoreLower &&
-              (d.seller_name || "").toLowerCase() === merchantStoreLower))
-      );
-      return allowedForRider || allowedForMerchant;
-    });
+    const filteredDeliveries = enriched
+      .filter((d) => {
+        const allowedForRider = Boolean(
+          riderRow &&
+            ((normalizeDeliveryStatus(d.delivery_status) === "pending" &&
+              !d.rider_id) ||
+              d.rider_id === riderRow.id)
+        );
+        const allowedForMerchant = Boolean(
+          merchantRow &&
+            (d.seller_id
+              ? d.seller_id === merchantRow.id
+              : merchantStoreLower &&
+                (d.seller_name || "").toLowerCase() === merchantStoreLower)
+        );
+        return allowedForRider || allowedForMerchant;
+      })
+      .map((d) => {
+        if (merchantRow && !riderRow) {
+          // La caserita ve su código de recojo (pickup_pin), nunca el código secreto de entrega del vecino
+          return { ...d, delivery_pin: "" };
+        }
+        // El repartidor nunca recibe los PINs secretos en la carga de datos
+        return { ...d, pickup_pin: "", delivery_pin: "" };
+      });
 
     const allowedOrderIds = new Set(
       filteredDeliveries.map((d) => d.order_id).filter(Boolean)
@@ -2356,9 +2442,7 @@ export class SupabaseEcoBancoRepository {
     stellarAddress?: string;
   }): Promise<{ ok: boolean; error?: string; rider?: Rider }> {
     const cleanName = (input.name || "").trim();
-    const cleanPhone =
-      normalizeBolivianPhone(input.phone) ??
-      (input.phone || "").replace(/\s+/g, "").trim();
+    const cleanPhone = normalizeBolivianPhone(input.phone);
     const vehicleType: RiderVehicleType =
       input.vehicleType === "moto_electrica" ? "moto_electrica" : "bicicleta";
     const cleanAddress = (input.address || "").trim();
@@ -2375,7 +2459,7 @@ export class SupabaseEcoBancoRepository {
 
     if (
       !cleanName ||
-      !cleanPhone ||
+      !input.phone?.trim() ||
       !cleanAddress ||
       !cleanCi ||
       !cleanSelfie ||
@@ -2385,6 +2469,14 @@ export class SupabaseEcoBancoRepository {
         ok: false,
         error:
           "Debes completar toda la Ficha de Confianza: nombre, WhatsApp, vehículo, dirección de domicilio, número de CI, selfie frontal del rostro descubierto y foto del Carnet de Identidad (CI).",
+      };
+    }
+
+    if (!cleanPhone) {
+      return {
+        ok: false,
+        error:
+          "Ingresa un número de WhatsApp de Bolivia válido (8 dígitos, ej. 76543210).",
       };
     }
 
@@ -2495,6 +2587,8 @@ export class SupabaseEcoBancoRepository {
     deliveryId: string
   ): Promise<{
     ok: boolean;
+    conflict?: boolean;
+    forbidden?: boolean;
     error?: string;
     delivery?: Delivery;
     rider?: Rider | null;
@@ -2512,6 +2606,7 @@ export class SupabaseEcoBancoRepository {
     if (!riderRow || riderRow.rider_verified !== true) {
       return {
         ok: false,
+        forbidden: true,
         error:
           "Debes completar y aprobar tu Ficha de Confianza (rider_verified) antes de aceptar pedidos.",
       };
@@ -2527,7 +2622,31 @@ export class SupabaseEcoBancoRepository {
     if (currentStatus !== "pending") {
       return {
         ok: false,
+        conflict: true,
         error: "Este pedido ya no está disponible para tomar.",
+      };
+    }
+
+    if (target.rider_id && target.rider_id !== rider.id) {
+      return {
+        ok: false,
+        conflict: true,
+        error: "Este envío ya fue tomado por otro repartidor.",
+      };
+    }
+
+    if (target.rider_id === rider.id) {
+      const existingEnriched = enrichDeliveriesWithContext(
+        [target],
+        orders,
+        users
+      )[0];
+      return {
+        ok: true,
+        delivery: existingEnriched
+          ? { ...existingEnriched, pickup_pin: "", delivery_pin: "" }
+          : undefined,
+        rider,
       };
     }
 
@@ -2536,18 +2655,30 @@ export class SupabaseEcoBancoRepository {
         ? "Moto Eléctrica EcoDohmi"
         : "Bicicleta EcoDohmi";
 
-    const updated = await supabaseTables.updateDelivery(target.id, {
+    const updated = await supabaseTables.claimDeliveryAtomically(target.id, {
       rider_id: rider.id,
       rider_name: rider.name,
       rider_phone: rider.phone,
       vehicle_type: vehicleLabel,
     });
 
-    const enriched = updated
-      ? enrichDeliveriesWithContext([updated], orders, users)[0]
-      : undefined;
+    if (!updated) {
+      return {
+        ok: false,
+        conflict: true,
+        error: "Este envío ya fue tomado por otro repartidor.",
+      };
+    }
 
-    return { ok: true, delivery: enriched, rider };
+    const enriched = enrichDeliveriesWithContext([updated], orders, users)[0];
+
+    return {
+      ok: true,
+      delivery: enriched
+        ? { ...enriched, pickup_pin: "", delivery_pin: "" }
+        : undefined,
+      rider,
+    };
   }
 
   public async validatePickupPin(
@@ -2556,6 +2687,8 @@ export class SupabaseEcoBancoRepository {
     pin: string
   ): Promise<{
     ok: boolean;
+    conflict?: boolean;
+    forbidden?: boolean;
     error?: string;
     delivery?: Delivery;
     rider?: Rider | null;
@@ -2573,6 +2706,7 @@ export class SupabaseEcoBancoRepository {
     if (!riderRow || riderRow.rider_verified !== true) {
       return {
         ok: false,
+        forbidden: true,
         error:
           "Debes completar tu Ficha de Confianza (rider_verified) para validar pedidos.",
       };
@@ -2582,6 +2716,14 @@ export class SupabaseEcoBancoRepository {
     const target = deliveries.find((d) => d.id === deliveryId);
     if (!target) {
       return { ok: false, error: "Pedido de entrega no encontrado." };
+    }
+
+    if (target.rider_id && target.rider_id !== rider.id) {
+      return {
+        ok: false,
+        forbidden: true,
+        error: "Este envío está asignado a otro repartidor.",
+      };
     }
 
     const currentStatus = normalizeDeliveryStatus(target.delivery_status);
@@ -2606,89 +2748,58 @@ export class SupabaseEcoBancoRepository {
         ? "Moto Eléctrica EcoDohmi"
         : "Bicicleta EcoDohmi";
 
-    const updated = await supabaseTables.updateDelivery(target.id, {
+    const pickupPatch: Partial<Delivery> = {
       delivery_status: "in_transit",
       rider_id: rider.id,
       rider_name: rider.name,
       rider_phone: rider.phone,
       vehicle_type: vehicleLabel,
       picked_up_at: new Date().toISOString(),
-    });
+    };
 
-    const enriched = updated
-      ? enrichDeliveriesWithContext([updated], orders, users)[0]
-      : undefined;
+    const updated = !target.rider_id
+      ? await supabaseTables.claimDeliveryAtomically(target.id, pickupPatch)
+      : await supabaseTables.updateDeliveryIfAssignedToRider(
+          target.id,
+          rider.id,
+          pickupPatch
+        );
 
-    return { ok: true, delivery: enriched, rider };
+    if (!updated) {
+      return {
+        ok: false,
+        conflict: true,
+        error: "Este envío ya fue tomado por otro repartidor.",
+      };
+    }
+
+    const enriched = enrichDeliveriesWithContext([updated], orders, users)[0];
+
+    return {
+      ok: true,
+      delivery: enriched
+        ? { ...enriched, pickup_pin: "", delivery_pin: "" }
+        : undefined,
+      rider,
+    };
   }
 
-  public async releaseEscrow(
-    session: EcoBancoSession,
-    input: {
-      deliveryId?: string;
-      orderId?: string;
-      deliveryPin: string;
-    }
-  ): Promise<{
+  private async finalizeOrderAndReleaseEscrow(params: {
+    target: Delivery;
+    order?: Order;
+    orders: Order[];
+    users: SupabaseUserRow[];
+    riderRow: SupabaseUserRow | null;
+    evidencePin: string;
+  }): Promise<{
     ok: boolean;
     error?: string;
     delivery?: Delivery;
     order?: Order;
     rider?: Rider | null;
   }> {
-    const [deliveries, orders, users] = await Promise.all([
-      supabaseTables.listDeliveries(),
-      supabaseTables.listOrders(),
-      supabaseTables.listUsers(),
-    ]);
+    const { target, order, orders, users, riderRow, evidencePin } = params;
 
-    const riderRow = session.riderId
-      ? users.find((u) => isRiderUserRow(u) && u.id === session.riderId) || null
-      : null;
-
-    if (!riderRow || riderRow.rider_verified !== true) {
-      return {
-        ok: false,
-        error:
-          "Debes estar verificado (rider_verified) para completar la entrega y liberar el Escrow.",
-      };
-    }
-
-    const target = deliveries.find(
-      (d) =>
-        (input.deliveryId && d.id === input.deliveryId) ||
-        (input.orderId && d.order_id === input.orderId)
-    );
-
-    if (!target) {
-      return { ok: false, error: "Envío no encontrado." };
-    }
-
-    const currentStatus = normalizeDeliveryStatus(target.delivery_status);
-    if (currentStatus === "delivered") {
-      return {
-        ok: false,
-        error: "Este pedido ya fue entregado y el Escrow ya fue liberado.",
-      };
-    }
-    if (currentStatus !== "in_transit") {
-      return {
-        ok: false,
-        error:
-          "Primero debes validar el PIN de recojo (pickup_pin) con la caserita para pasar a tránsito.",
-      };
-    }
-
-    const cleanPin = (input.deliveryPin || "").trim();
-    if (!cleanPin || cleanPin !== target.delivery_pin) {
-      return {
-        ok: false,
-        error:
-          "PIN de entrega (delivery_pin) incorrecto. Pídele el código de 4 dígitos al vecino comprador.",
-      };
-    }
-
-    const order = orders.find((o) => o.id === target.order_id);
     const resolvedContractId = (
       order?.contract_id ||
       target.contract_id ||
@@ -2702,7 +2813,7 @@ export class SupabaseEcoBancoRepository {
       try {
         const releasedOnChain = await approveAndReleaseMultiReleaseOrder({
           contractId: resolvedContractId,
-          deliveryPin: cleanPin,
+          deliveryPin: evidencePin,
           orderId: order?.id || target.order_id,
           deliveryId: target.id,
         });
@@ -2752,24 +2863,31 @@ export class SupabaseEcoBancoRepository {
     const updatedDelivery = await supabaseTables.updateDelivery(target.id, {
       delivery_status: "delivered",
       delivered_at: new Date().toISOString(),
-      rider_id: riderRow.id,
-      rider_name: riderRow.name,
-      rider_phone: riderRow.phone,
+      ...(riderRow
+        ? {
+            rider_id: riderRow.id,
+            rider_name: riderRow.name,
+            rider_phone: riderRow.phone,
+          }
+        : {}),
       release_tx_hash: releaseTxHash,
     });
 
-    const feeMotes = Number(
-      target.delivery_fee_motes ?? RIDER_DELIVERY_FEE_MOTES
-    );
-    const updatedRiderRow = await supabaseTables.updateUser(riderRow.id, {
-      motes_balance: Number(riderRow.motes_balance ?? 0) + feeMotes,
-      motes_earned: Number(riderRow.motes_earned ?? 0) + feeMotes,
-      sales_count: Number(riderRow.sales_count ?? 0) + 1,
-      motes_enabled: true,
-      fiat_wallet_enabled: true,
-    });
+    let updatedRider: Rider | null = null;
+    if (riderRow) {
+      const feeMotes = Number(
+        target.delivery_fee_motes ?? RIDER_DELIVERY_FEE_MOTES
+      );
+      const updatedRiderRow = await supabaseTables.updateUser(riderRow.id, {
+        motes_balance: Number(riderRow.motes_balance ?? 0) + feeMotes,
+        motes_earned: Number(riderRow.motes_earned ?? 0) + feeMotes,
+        sales_count: Number(riderRow.sales_count ?? 0) + 1,
+        motes_enabled: true,
+        fiat_wallet_enabled: true,
+      });
+      updatedRider = mapRiderRow(updatedRiderRow || riderRow, true);
+    }
 
-    const updatedRider = mapRiderRow(updatedRiderRow || riderRow, true);
     const nextOrders = updatedOrder
       ? orders.map((o) => (o.id === updatedOrder?.id ? updatedOrder : o))
       : orders;
@@ -2785,18 +2903,233 @@ export class SupabaseEcoBancoRepository {
     };
   }
 
-  public async validateDeliveryPin(
+  public async releaseEscrowByBuyer(
     session: EcoBancoSession,
-    deliveryId: string,
-    pin: string
+    input: {
+      deliveryId?: string;
+      orderId?: string;
+      deliveryPin?: string;
+    }
   ): Promise<{
     ok: boolean;
+    forbidden?: boolean;
     error?: string;
     delivery?: Delivery;
     order?: Order;
     rider?: Rider | null;
   }> {
-    return this.releaseEscrow(session, { deliveryId, deliveryPin: pin });
+    if (!session.buyerId && !session.merchantId) {
+      return {
+        ok: false,
+        forbidden: true,
+        error:
+          "Debes iniciar sesión como comprador dueño del pedido para liberar el Pago Protegido.",
+      };
+    }
+
+    const [deliveries, orders, users] = await Promise.all([
+      supabaseTables.listDeliveries(),
+      supabaseTables.listOrders(),
+      supabaseTables.listUsers(),
+    ]);
+
+    const order = orders.find(
+      (o) =>
+        (input.orderId && o.id === input.orderId) ||
+        (input.deliveryId &&
+          deliveries.some(
+            (d) => d.id === input.deliveryId && d.order_id === o.id
+          ))
+    );
+    const target = deliveries.find(
+      (d) =>
+        (input.deliveryId && d.id === input.deliveryId) ||
+        (input.orderId && d.order_id === input.orderId) ||
+        (order && d.order_id === order.id)
+    );
+
+    if (!target) {
+      return { ok: false, error: "Pedido o envío no encontrado." };
+    }
+
+    const callerId =
+      order?.buyer_type === "merchant" ? session.merchantId : session.buyerId;
+    const ownerId = order?.buyer_id || target.buyer_id;
+
+    if (!callerId || !ownerId || ownerId !== callerId) {
+      return {
+        ok: false,
+        forbidden: true,
+        error:
+          "Solo el comprador dueño del pedido puede liberar el Pago Protegido.",
+      };
+    }
+
+    if (
+      order?.status === "RELEASED" ||
+      normalizeDeliveryStatus(target.delivery_status) === "delivered"
+    ) {
+      return {
+        ok: false,
+        error: "Este pedido ya fue entregado y el pago ya fue liberado.",
+      };
+    }
+
+    const providedPin = (input.deliveryPin || "").trim();
+    if (providedPin && providedPin !== target.delivery_pin) {
+      return {
+        ok: false,
+        error: "PIN de entrega (delivery_pin) incorrecto.",
+      };
+    }
+
+    const assignedRiderRow = target.rider_id
+      ? users.find((u) => isRiderUserRow(u) && u.id === target.rider_id) ||
+        null
+      : null;
+
+    const result = await this.finalizeOrderAndReleaseEscrow({
+      target,
+      order,
+      orders,
+      users,
+      riderRow: assignedRiderRow,
+      evidencePin: providedPin || target.delivery_pin,
+    });
+
+    if (!result.ok) {
+      return result;
+    }
+
+    return {
+      ...result,
+      delivery: result.delivery
+        ? { ...result.delivery, pickup_pin: "" }
+        : undefined,
+    };
+  }
+
+  public async releaseEscrow(
+    session: EcoBancoSession,
+    input: {
+      deliveryId?: string;
+      orderId?: string;
+      deliveryPin: string;
+    }
+  ): Promise<{
+    ok: boolean;
+    forbidden?: boolean;
+    error?: string;
+    delivery?: Delivery;
+    order?: Order;
+    rider?: Rider | null;
+  }> {
+    if (session.riderId) {
+      return this.validateDeliveryPin(
+        session,
+        input.deliveryId || "",
+        input.deliveryPin,
+        input.orderId
+      );
+    }
+    return this.releaseEscrowByBuyer(session, input);
+  }
+
+  public async validateDeliveryPin(
+    session: EcoBancoSession,
+    deliveryId: string,
+    pin: string,
+    orderId?: string
+  ): Promise<{
+    ok: boolean;
+    forbidden?: boolean;
+    error?: string;
+    delivery?: Delivery;
+    order?: Order;
+    rider?: Rider | null;
+  }> {
+    const [deliveries, orders, users] = await Promise.all([
+      supabaseTables.listDeliveries(),
+      supabaseTables.listOrders(),
+      supabaseTables.listUsers(),
+    ]);
+
+    const riderRow = session.riderId
+      ? users.find((u) => isRiderUserRow(u) && u.id === session.riderId) || null
+      : null;
+
+    if (!riderRow || riderRow.rider_verified !== true) {
+      return {
+        ok: false,
+        forbidden: true,
+        error:
+          "Debes estar verificado (rider_verified) para completar la entrega y liberar el Escrow.",
+      };
+    }
+
+    const target = deliveries.find(
+      (d) =>
+        (deliveryId && d.id === deliveryId) ||
+        (orderId && d.order_id === orderId)
+    );
+
+    if (!target) {
+      return { ok: false, error: "Envío no encontrado." };
+    }
+
+    if (!target.rider_id || target.rider_id !== riderRow.id) {
+      return {
+        ok: false,
+        forbidden: true,
+        error:
+          "Solo el repartidor asignado a este envío puede validar la entrega.",
+      };
+    }
+
+    const currentStatus = normalizeDeliveryStatus(target.delivery_status);
+    if (currentStatus === "delivered") {
+      return {
+        ok: false,
+        error: "Este pedido ya fue entregado y el Escrow ya fue liberado.",
+      };
+    }
+    if (currentStatus !== "in_transit") {
+      return {
+        ok: false,
+        error:
+          "Primero debes validar el PIN de recojo (pickup_pin) con la caserita para pasar a tránsito.",
+      };
+    }
+
+    const cleanPin = (pin || "").trim();
+    if (!cleanPin || cleanPin !== target.delivery_pin) {
+      return {
+        ok: false,
+        error:
+          "PIN de entrega (delivery_pin) incorrecto. Pídele el código de 4 dígitos al vecino comprador.",
+      };
+    }
+
+    const order = orders.find((o) => o.id === target.order_id);
+    const result = await this.finalizeOrderAndReleaseEscrow({
+      target,
+      order,
+      orders,
+      users,
+      riderRow,
+      evidencePin: cleanPin,
+    });
+
+    if (!result.ok) {
+      return result;
+    }
+
+    return {
+      ...result,
+      delivery: result.delivery
+        ? { ...result.delivery, pickup_pin: "", delivery_pin: "" }
+        : undefined,
+    };
   }
 
   public async lookupUserByPollarSession(input: {
@@ -2904,20 +3237,32 @@ export class SupabaseEcoBancoRepository {
         session.buyerId || session.merchantId || session.riderId || "";
     }
 
-    if (
-      input.userId &&
-      (input.userId === session.buyerId ||
-        input.userId === session.merchantId ||
-        input.userId === session.riderId)
-    ) {
-      targetId = input.userId;
-    }
-
     if (!targetId) {
       return {
         ok: false,
         error:
           "No se encontró una sesión activa para vincular la billetera Stellar.",
+      };
+    }
+
+    if (input.userId && input.userId !== targetId) {
+      return {
+        ok: false,
+        error: "La cuenta indicada no coincide con tu sesión activa.",
+      };
+    }
+
+    const users = await supabaseTables.listUsers();
+    const conflict = users.find(
+      (u) =>
+        u.id !== targetId &&
+        ((cleanPollarUserId && u.pollar_user_id === cleanPollarUserId) ||
+          (cleanStellarAddress && u.stellar_address === cleanStellarAddress))
+    );
+    if (conflict) {
+      return {
+        ok: false,
+        error: "Esta billetera ya está vinculada a otra cuenta.",
       };
     }
 

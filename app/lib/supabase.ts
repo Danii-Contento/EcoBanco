@@ -616,6 +616,41 @@ export const supabaseTables = {
       : null;
   },
 
+  async claimDeliveryAtomically(
+    id: string,
+    patch: Partial<Delivery>
+  ): Promise<Delivery | null> {
+    const dbPatch = toDeliveryDbPatch(patch);
+    const rows = await restWriteWithSchemaFallback<SupabaseDeliveryRow[]>(
+      "deliveries",
+      "PATCH",
+      dbPatch as unknown as Record<string, unknown>,
+      `id=eq.${encodeURIComponent(id)}&delivery_status=eq.pending&rider_id=is.null`
+    );
+    if (!rows || rows.length === 0) {
+      return null;
+    }
+    return normalizeDeliveryRow({ ...rows[0], ...dbPatch });
+  },
+
+  async updateDeliveryIfAssignedToRider(
+    id: string,
+    riderId: string,
+    patch: Partial<Delivery>
+  ): Promise<Delivery | null> {
+    const dbPatch = toDeliveryDbPatch(patch);
+    const rows = await restWriteWithSchemaFallback<SupabaseDeliveryRow[]>(
+      "deliveries",
+      "PATCH",
+      dbPatch as unknown as Record<string, unknown>,
+      `id=eq.${encodeURIComponent(id)}&rider_id=eq.${encodeURIComponent(riderId)}`
+    );
+    if (!rows || rows.length === 0) {
+      return null;
+    }
+    return normalizeDeliveryRow({ ...rows[0], ...dbPatch });
+  },
+
   async findRampTransactionByOrderOrHash(
     pollarOrderId: string,
     onchainTxHash?: string | null

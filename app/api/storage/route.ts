@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readSession } from "@/app/lib/session";
+import { applyNoStoreHeaders, readSession } from "@/app/lib/session";
 import {
   getStoredObject,
   isValidBucket,
   uploadImageToStorage,
 } from "@/app/lib/supabase";
+
+const MAX_RIDER_VERIFICATION_IMAGE_BYTES = 650 * 1024;
+const DATA_IMAGE_REGEX = /^data:image\/[a-zA-Z0-9.+-]+;base64,([A-Za-z0-9+/=\s]+)$/;
 
 export async function GET(request: NextRequest) {
   try {
@@ -44,60 +47,97 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const session = readSession(request);
     const body = await request.json();
     const { bucket, dataUrl, ownerId } = body;
 
     if (!bucket || !isValidBucket(String(bucket))) {
-      return NextResponse.json(
-        {
-          error:
-            "Bucket inválido. Debe ser 'avatars', 'product-images', 'qr-bancarios' o 'rider-verifications'.",
-        },
-        { status: 400 }
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            error:
+              "Bucket inválido. Debe ser 'avatars', 'product-images', 'qr-bancarios' o 'rider-verifications'.",
+          },
+          { status: 400 }
+        )
       );
     }
+
+    let resolvedOwnerId = String(ownerId || "ecobanco");
 
     if (
       bucket === "avatars" ||
       bucket === "product-images" ||
       bucket === "qr-bancarios"
     ) {
-      const session = readSession(request);
       if (!session.merchantId) {
-        return NextResponse.json(
-          { error: "Debes iniciar sesión como caserita para subir archivos." },
-          { status: 401 }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: "Debes iniciar sesión como caserita para subir archivos." },
+            { status: session.buyerId || session.riderId ? 403 : 401 }
+          )
         );
       }
+      resolvedOwnerId = session.merchantId;
     }
 
     if (!dataUrl || typeof dataUrl !== "string") {
-      return NextResponse.json(
-        { error: "Se requiere el contenido de la imagen (dataUrl)." },
-        { status: 400 }
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { error: "Se requiere el contenido de la imagen (dataUrl)." },
+          { status: 400 }
+        )
       );
+    }
+
+    if (bucket === "rider-verifications") {
+      const match = dataUrl.trim().match(DATA_IMAGE_REGEX);
+      if (!match) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: "La imagen de verificación debe ser un formato de imagen válido." },
+            { status: 400 }
+          )
+        );
+      }
+      const approxBytes = Math.floor((match[1].replace(/\s+/g, "").length * 3) / 4);
+      if (approxBytes > MAX_RIDER_VERIFICATION_IMAGE_BYTES) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "La foto es demasiado pesada. Comprímela antes de subirla.",
+            },
+            { status: 400 }
+          )
+        );
+      }
     }
 
     const result = await uploadImageToStorage(
       bucket,
       dataUrl,
-      String(ownerId || "ecobanco")
+      resolvedOwnerId
     );
 
-    return NextResponse.json(
-      {
-        ok: true,
-        bucket,
-        path: result.path,
-        publicUrl: result.publicUrl,
-      },
-      { status: 201 }
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          ok: true,
+          bucket,
+          path: result.path,
+          publicUrl: result.publicUrl,
+        },
+        { status: 201 }
+      )
     );
   } catch (err) {
     const message =
       err instanceof Error
         ? err.message
         : "No se pudo subir la imagen a Storage.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return applyNoStoreHeaders(
+      NextResponse.json({ error: message }, { status: 400 })
+    );
   }
 }

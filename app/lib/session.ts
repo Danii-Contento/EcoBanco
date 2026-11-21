@@ -39,14 +39,54 @@ function signPayload(payloadB64: string): string {
     .digest("base64url");
 }
 
-export function serializeSession(session: EcoBancoSession): string {
-  const clean: EcoBancoSession = {};
-  if (session.buyerId) clean.buyerId = session.buyerId;
-  if (session.merchantId) clean.merchantId = session.merchantId;
-  if (session.riderId) clean.riderId = session.riderId;
-  if (session.activeBuyerType === "merchant" || session.activeBuyerType === "buyer") {
-    clean.activeBuyerType = session.activeBuyerType;
+export function createEmptySession(): EcoBancoSession {
+  return {};
+}
+
+export function createExclusiveBuyerSession(buyerId: string): EcoBancoSession {
+  const cleanId = String(buyerId || "").trim();
+  return cleanId ? { buyerId: cleanId, activeBuyerType: "buyer" } : {};
+}
+
+export function createExclusiveMerchantSession(
+  merchantId: string
+): EcoBancoSession {
+  const cleanId = String(merchantId || "").trim();
+  return cleanId ? { merchantId: cleanId, activeBuyerType: "merchant" } : {};
+}
+
+export function createExclusiveRiderSession(riderId: string): EcoBancoSession {
+  const cleanId = String(riderId || "").trim();
+  return cleanId ? { riderId: cleanId } : {};
+}
+
+export function getActiveSessionRole(
+  session: EcoBancoSession
+): "buyer" | "merchant" | "rider" | null {
+  if (session.riderId) return "rider";
+  if (session.merchantId) return "merchant";
+  if (session.buyerId) return "buyer";
+  return null;
+}
+
+function normalizeExclusiveSession(raw: EcoBancoSession): EcoBancoSession {
+  if (raw.activeBuyerType === "merchant" && raw.merchantId) {
+    return createExclusiveMerchantSession(raw.merchantId);
   }
+  if (raw.buyerId) {
+    return createExclusiveBuyerSession(raw.buyerId);
+  }
+  if (raw.merchantId) {
+    return createExclusiveMerchantSession(raw.merchantId);
+  }
+  if (raw.riderId) {
+    return createExclusiveRiderSession(raw.riderId);
+  }
+  return {};
+}
+
+export function serializeSession(session: EcoBancoSession): string {
+  const clean = normalizeExclusiveSession(session);
 
   const payloadB64 = Buffer.from(JSON.stringify(clean), "utf8").toString(
     "base64url"
@@ -99,7 +139,7 @@ export function parseSessionToken(token?: string | null): EcoBancoSession {
     ) {
       session.activeBuyerType = decoded.activeBuyerType;
     }
-    return session;
+    return normalizeExclusiveSession(session);
   } catch {
     return {};
   }
@@ -110,15 +150,28 @@ export function readSession(request: NextRequest): EcoBancoSession {
   return parseSessionToken(token);
 }
 
+export function applyNoStoreHeaders<T>(
+  response: NextResponse<T>
+): NextResponse<T> {
+  response.headers.set(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, private"
+  );
+  response.headers.set("Pragma", "no-cache");
+  return response;
+}
+
 export function applySessionCookie<T>(
   response: NextResponse<T>,
   session: EcoBancoSession
 ): NextResponse<T> {
+  const exclusive = normalizeExclusiveSession(session);
   const isEmpty =
-    !session.buyerId &&
-    !session.merchantId &&
-    !session.riderId &&
-    !session.activeBuyerType;
+    !exclusive.buyerId &&
+    !exclusive.merchantId &&
+    !exclusive.riderId;
+
+  applyNoStoreHeaders(response);
 
   if (isEmpty) {
     response.cookies.set(SESSION_COOKIE_NAME, "", {
@@ -131,7 +184,7 @@ export function applySessionCookie<T>(
     return response;
   }
 
-  response.cookies.set(SESSION_COOKIE_NAME, serializeSession(session), {
+  response.cookies.set(SESSION_COOKIE_NAME, serializeSession(exclusive), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
@@ -156,24 +209,26 @@ export function isGuestSession(session: EcoBancoSession): boolean {
 }
 
 /**
- * Adjunta el identificador del vecino comprador a la sesión preservando otros roles si existieran.
+ * Inicia una sesión exclusiva para el vecino comprador, aislando cualquier perfil previo.
  */
 export function withBuyerSession(
-  session: EcoBancoSession,
+  _session: EcoBancoSession,
   buyerId: string
 ): EcoBancoSession {
-  return {
-    ...session,
-    buyerId,
-    activeBuyerType: "buyer",
-  };
+  return createExclusiveBuyerSession(buyerId);
 }
 
 /**
- * Remueve la sesión del vecino comprador dejando intactas las demás sesiones de la cookie.
+ * Remueve la sesión del vecino comprador y limpia `activeBuyerType` si no quedan otros roles.
  */
 export function clearBuyerSession(session: EcoBancoSession): EcoBancoSession {
   const next: EcoBancoSession = { ...session };
   delete next.buyerId;
-  return next;
+  if (!next.merchantId && !next.riderId) {
+    return {};
+  }
+  if (next.activeBuyerType === "buyer") {
+    delete next.activeBuyerType;
+  }
+  return normalizeExclusiveSession(next);
 }

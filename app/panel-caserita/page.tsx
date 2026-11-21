@@ -20,6 +20,7 @@ import {
 import {
   disconnectProfileSession,
   isPageReloadNavigation,
+  purgeClientSessionStorage,
   useDisconnectOnPageUnload,
 } from "@/app/lib/useDisconnectOnReload";
 import { CaseritaOrdersTab } from "@/app/components/caserita/CaseritaOrdersTab";
@@ -128,12 +129,17 @@ export default function PanelCaseritaPage() {
   }, []);
 
   const resetToLoginState = useCallback(() => {
+    purgeClientSessionStorage();
     setMerchant(null);
     setProducts([]);
     setDeliveries([]);
     setOrders([]);
     setPendingRampOrder(null);
+    setCfgMessage(null);
+    setCfgError(null);
+    setProductError(null);
     setActiveView("principal");
+    setCaseritaTab("puesto");
     setAuthTab("login");
     setAuthStatus("unauthenticated");
   }, []);
