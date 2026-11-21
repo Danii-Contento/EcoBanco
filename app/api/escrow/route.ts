@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { applyNoStoreHeaders, readSession } from "@/app/lib/session";
 import { db } from "@/app/lib/store";
 import { sanitizeUserError } from "@/app/lib/friendlyCopy";
+import {
+  notifyEscrowReleased,
+  notifyOrderCreated,
+} from "@/app/lib/whatsappBridge";
 
 export async function POST(request: NextRequest) {
   try {
@@ -76,6 +80,30 @@ export async function POST(request: NextRequest) {
       });
 
       const state = await db.getState(session);
+
+      if (releaseResult.order || releaseResult.delivery) {
+        const ord = releaseResult.order;
+        const del = releaseResult.delivery;
+        const buyerProfile = session.merchantId
+          ? state.merchant
+          : state.buyer;
+        void notifyEscrowReleased({
+          orderId: ord?.id || del?.order_id || String(orderId || ""),
+          shortCode: ord?.short_code ?? del?.short_code ?? null,
+          productName:
+            ord?.product_name || del?.product_name || "Pedido comunitario",
+          amountBs: Number(ord?.amount_motes ?? del?.amount_motes ?? 0),
+          sellerId: ord?.seller_id ?? del?.seller_id ?? null,
+          sellerPhone: del?.seller_phone ?? null,
+          buyerId: ord?.buyer_id ?? del?.buyer_id ?? null,
+          buyerPhone: buyerProfile?.phone ?? null,
+          riderId: del?.rider_id ?? releaseResult.rider?.id ?? null,
+          riderPhone:
+            del?.rider_phone ?? releaseResult.rider?.phone ?? null,
+          deliveryFeeBs: Number(del?.delivery_fee_motes ?? 5),
+        }).catch(() => undefined);
+      }
+
       return applyNoStoreHeaders(
         NextResponse.json(
           {
@@ -169,6 +197,33 @@ export async function POST(request: NextRequest) {
       fundTxHash:
         result.order?.fund_tx_hash ?? result.receipt?.fundTxHash ?? null,
     });
+
+    const rawPickupPin = result.delivery?.pickup_pin ?? null;
+    const rawDeliveryPin = result.delivery?.delivery_pin ?? null;
+    const buyerProfile =
+      resolvedBuyerType === "merchant" ? state.merchant : state.buyer;
+
+    if (result.order) {
+      void notifyOrderCreated({
+        orderId: result.order.id,
+        shortCode: result.order.short_code ?? result.delivery?.short_code ?? null,
+        productName: result.order.product_name,
+        amountBs: Number(result.order.amount_motes ?? 0),
+        sellerId: result.order.seller_id,
+        sellerName: result.order.seller_name,
+        sellerPhone: result.delivery?.seller_phone ?? product.sellerPhone ?? null,
+        buyerId: result.order.buyer_id,
+        buyerName:
+          result.delivery?.buyer_name ||
+          buyerProfile?.storeName ||
+          buyerProfile?.name ||
+          "Vecino",
+        buyerPhone: buyerProfile?.phone ?? null,
+        deliveryAddress: result.delivery?.delivery_address ?? null,
+        pickupPin: rawPickupPin,
+        deliveryPin: rawDeliveryPin,
+      }).catch(() => undefined);
+    }
 
     // Redactar el PIN secreto de recojo (solo para la caserita) de la respuesta del comprador
     const safeReceipt = result.receipt
