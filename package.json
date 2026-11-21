@@ -1,0 +1,33 @@
+{
+  "name": "ecobanco-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@creit.tech/stellar-wallets-kit": "^2.8.0",
+    "@pollar/core": "^0.12.1-rc.22",
+    "@pollar/react": "^0.12.1-rc.22",
+    "@pollar/stellar-wallets-kit-adapter": "^0.12.1-rc.22",
+    "@stellar/stellar-sdk": "^17.4.0",
+    "@supabase/supabase-js": "^2.45.4",
+    "@trustless-work/escrow": "^3.0.5",
+    "lucide-react": "^0.454.0",
+    "next": "14.2.16",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^5.5.3"
+  }
+}

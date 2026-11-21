@@ -1,0 +1,122 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,800;9..144,900&family=Montserrat:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-bosque text-arena font-sans antialiased selection:bg-oro selection:text-bosque;
+    background-image: 
+      radial-gradient(circle at 15% 10%, rgba(76, 175, 80, 0.08) 0%, transparent 40%),
+      radial-gradient(circle at 85% 20%, rgba(224, 162, 48, 0.08) 0%, transparent 40%),
+      radial-gradient(circle at 50% 90%, rgba(115, 68, 31, 0.12) 0%, transparent 50%);
+    min-height: 100vh;
+  }
+
+  h1, h2, .font-brand {
+    font-family: 'Cooper Black', 'Fraunces', Georgia, serif;
+  }
+}
+
+@layer utilities {
+  .wallet-inset {
+    box-shadow: inset 0 4px 14px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(247, 235, 210, 0.08);
+  }
+}
+
+/* ============================================================================
+   Envoltura visual "Cripto-Cero" para <RampWidget> (Recargas en Bolivianos Bs)
+   Oculta etiquetas internas de USDC, crypto, network, swap y branding técnico.
+   ============================================================================ */
+.pollar-overlay {
+  --pollar-overlay-z-index: 90 !important;
+  z-index: 90 !important;
+}
+
+body.ecobanco-qr-ramp-active .pollar-overlay {
+  background-color: rgba(10, 17, 14, 0.86) !important;
+  backdrop-filter: blur(6px);
+}
+
+body.ecobanco-qr-ramp-active .pollar-ramp-modal {
+  --pollar-bg: #14201C !important;
+  --pollar-border: rgba(224, 162, 48, 0.55) !important;
+  --pollar-text: #F7EBD2 !important;
+  --pollar-muted: rgba(247, 235, 210, 0.85) !important;
+  --pollar-input-bg: #0D1714 !important;
+  --pollar-accent: #E0A230 !important;
+  --pollar-btn-primary-fg: #14201C !important;
+  --pollar-modal-border-radius: 1.25rem !important;
+  --pollar-buttons-border-radius: 0.875rem !important;
+  --pollar-buttons-height: 52px !important;
+  --pollar-input-height: 52px !important;
+  border-width: 2px !important;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.65), 0 0 28px rgba(224, 162, 48, 0.22) !important;
+}
+
+body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-modal-title {
+  font-family: 'Cooper Black', 'Fraunces', Georgia, serif !important;
+  font-size: 1.35rem !important;
+  color: #FED053 !important;
+}
+
+body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-swap-amount {
+  font-size: 1.75rem !important;
+  font-weight: 800 !important;
+  color: #FED053 !important;
+}
+
+body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-btn-primary {
+  background: linear-gradient(90deg, #E0A230 0%, #FED053 50%, #E0A230 100%) !important;
+  color: #14201C !important;
+  font-size: 1.05rem !important;
+  font-weight: 800 !important;
+}
+
+/* Ocultar paneles de recepción en USDC, swap, cotización crypto, red y footer técnico */
+body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-swap-panel[aria-labelledby="pollar-ramp-receive-label"],
+body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-swap-reverse,
+body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-swap-rate-row,
+body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-swap-quote,
+body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-txr-toggle,
+body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-chain-tag,
+body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-ramp-all-routes,
+body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-footer {
+  display: none !important;
+}
+
+.ecobanco-ramp-fee-badge {
+  margin: -0.5rem 0 1rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0.75rem;
+  background: rgba(76, 175, 80, 0.16);
+  border: 1px solid rgba(76, 175, 80, 0.5);
+  color: #F7EBD2;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.ecobanco-ramp-download-qr-btn {
+  margin-top: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  border: 2px solid #4CAF50;
+  background: rgba(76, 175, 80, 0.2);
+  color: #F7EBD2;
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.ecobanco-ramp-download-qr-btn:hover {
+  background: #4CAF50;
+  color: #14201C;
+}

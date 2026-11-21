@@ -1,0 +1,3470 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EcoBanco Bolivia | Tu mercado del barrio, sin comisiones</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,800;9..144,900&family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bosque: "#14201C",
+            madera: "#73441F",
+            arena: "#F7EBD2",
+            oro: "#E0A230",
+            brillo: "#FED053",
+            brote: "#4CAF50",
+          },
+          fontFamily: {
+            brand: ['"Cooper Black"', '"Fraunces"', 'Georgia', 'serif'],
+            sans: ['"Montserrat"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+          },
+          boxShadow: {
+            'wallet-inner': 'inset 0 4px 12px 0 rgba(0, 0, 0, 0.55), inset 0 1px 2px 0 rgba(255, 255, 255, 0.06)',
+            'gold-glow': '0 10px 25px -5px rgba(224, 162, 48, 0.35), 0 4px 10px -4px rgba(254, 208, 83, 0.25)',
+            'green-glow': '0 10px 25px -5px rgba(76, 175, 80, 0.3)',
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    body {
+      background-color: #14201C;
+      color: #F7EBD2;
+      font-family: 'Montserrat', sans-serif;
+      background-image:
+        radial-gradient(circle at 15% 10%, rgba(76, 175, 80, 0.08) 0%, transparent 40%),
+        radial-gradient(circle at 85% 20%, rgba(224, 162, 48, 0.08) 0%, transparent 40%),
+        radial-gradient(circle at 50% 90%, rgba(115, 68, 31, 0.12) 0%, transparent 50%);
+      min-height: 100vh;
+    }
+    .wallet-inset {
+      box-shadow: inset 0 4px 14px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(247, 235, 210, 0.08);
+    }
+  </style>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-bosque text-arena font-sans antialiased">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const SUBSCRIPTION_COST = 100;
+    const PREMIUM_FREE_DELIVERIES = 5;
+    const RIDER_DELIVERY_FEE_BS = 5;
+    const DB_STORAGE_KEY = "ecobanco_supabase_v1";
+    const BUCKETS = {
+      AVATARS: "avatars",
+      PRODUCT_IMAGES: "product-images",
+      QR_BANCARIOS: "qr-bancarios",
+      RIDER_VERIFICATIONS: "rider-verifications",
+    };
+
+    // Precarga únicamente la cuenta real de Eliana Rivero Espinoza
+    const ELIANA_SEED = {
+      id: "mer-eliana-01",
+      role: "merchant",
+      ownerName: "Eliana Rivero Espinoza",
+      storeName: "Doña Eliana",
+      phone: "73540555",
+      password: "73540555",
+      storeDescription: "",
+      address: "",
+      schedule: "",
+      avatarUrl: "",
+      profileCompleted: false,
+      bankQrUrl: "",
+      isProsumer: false,
+      isPremium: false,
+      fiatWalletEnabled: false,
+      qrEnabled: false,
+      motesEnabled: true,
+      motes: 0,
+      fiatBs: 0,
+      freeDeliveries: 0,
+      free_deliveries_remaining: 0,
+      salesCount: 0,
+      pollar_user_id: null,
+      stellar_address: null,
+    };
+
+    function formatShortStellarAddress(address) {
+      if (!address) return "";
+      if (address.length <= 12) return address;
+      return `${address.slice(0, 6)}...${address.slice(-4)}`;
+    }
+
+    function generateClassicStellarPreviewAddress(seed) {
+      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      let out = "G";
+      let h = 2166136261;
+      const src = String(seed || Date.now());
+      for (let i = 0; i < 55; i++) {
+        h ^= src.charCodeAt(i % src.length) + i * 31;
+        h = Math.imul(h, 16777619);
+        out += alphabet[Math.abs(h) % alphabet.length];
+      }
+      return out;
+    }
+
+    function formatBs(val) {
+      const n = Math.round(Number(val ?? 0));
+      return `${Number.isFinite(n) ? n : 0} Bs`;
+    }
+
+    function formatMotes(val) {
+      const n = Math.round(Number(val ?? 0));
+      return `${Number.isFinite(n) ? n : 0} MOTES`;
+    }
+
+    function formatOrderCode(rawId) {
+      if (!rawId) return "Pedido";
+      const match = String(rawId).match(/(\d{3,})$/);
+      if (match) return `Pedido #${match[1]}`;
+      return `Pedido #${String(rawId).slice(-4).toUpperCase()}`;
+    }
+
+    function isRiderUserRow(u) {
+      return Boolean(u && (u.role === "rider" || (u.id || "").startsWith("rid-") || u.riderInviteCode || u.rider_invite_code));
+    }
+
+    function generateUniqueRiderInviteCode(users) {
+      const existingCodes = new Set(
+        (users || []).map((u) => u.rider_invite_code || u.riderInviteCode).filter(Boolean)
+      );
+      for (let i = 0; i < 50; i++) {
+        const candidate = `ECO-R-${Math.floor(1000 + Math.random() * 9000)}`;
+        if (!existingCodes.has(candidate)) return candidate;
+      }
+      return `ECO-R-${String(Date.now()).slice(-4)}`;
+    }
+
+    function generateFourDigitPin(excludePin) {
+      let pin = String(Math.floor(1000 + Math.random() * 9000));
+      if (excludePin && pin === excludePin) {
+        pin = String(((Number(pin) - 1000 + 1) % 9000) + 1000);
+      }
+      return pin;
+    }
+
+    function generateReferralCode(name) {
+      const clean = (name || "USER")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-zA-Z0-9]/g, "")
+        .toUpperCase()
+        .slice(0, 6);
+      const suffix = Math.floor(10 + Math.random() * 90);
+      return `ECO-${clean || "USER"}${suffix}`;
+    }
+
+    function normalizeDeliveryStatus(status) {
+      const s = (status || "").toLowerCase();
+      if (s === "in_transit") return "in_transit";
+      if (s === "delivered") return "delivered";
+      return "pending";
+    }
+
+    function createInitialDbSnapshot() {
+      return {
+        tables: {
+          users: [{ ...ELIANA_SEED }],
+          products: [],
+          orders: [],
+          deliveries: [],
+          rampTransactions: [],
+        },
+        storage: {
+          avatars: {},
+          "product-images": {},
+          "qr-bancarios": {},
+          "rider-verifications": {},
+        },
+        session: {
+          activeMerchantId: null,
+          activeBuyerId: null,
+          buyerType: "buyer",
+          route: "/",
+          rider: null,
+          pollarSession: {
+            authenticated: false,
+            provider: null,
+            email: "",
+            name: "",
+            pollarUserId: null,
+            stellarAddress: null,
+          },
+        },
+      };
+    }
+
+    function loadPersistedDb() {
+      try {
+        const raw = window.localStorage.getItem(DB_STORAGE_KEY);
+        if (!raw) return createInitialDbSnapshot();
+        const parsed = JSON.parse(raw);
+        const users = Array.isArray(parsed?.tables?.users) ? parsed.tables.users : [];
+        const hasEliana = users.some((u) => u.id === ELIANA_SEED.id || u.phone === ELIANA_SEED.phone);
+        return {
+          tables: {
+            users: hasEliana ? users : [{ ...ELIANA_SEED }, ...users],
+            products: Array.isArray(parsed?.tables?.products) ? parsed.tables.products : [],
+            orders: Array.isArray(parsed?.tables?.orders) ? parsed.tables.orders : [],
+            deliveries: Array.isArray(parsed?.tables?.deliveries) ? parsed.tables.deliveries : [],
+            rampTransactions: Array.isArray(parsed?.tables?.rampTransactions) ? parsed.tables.rampTransactions : [],
+          },
+          storage: {
+            avatars: parsed?.storage?.avatars || {},
+            "product-images": parsed?.storage?.["product-images"] || {},
+            "qr-bancarios": parsed?.storage?.["qr-bancarios"] || {},
+            "rider-verifications": parsed?.storage?.["rider-verifications"] || {},
+          },
+          session: {
+            activeMerchantId: parsed?.session?.activeMerchantId || null,
+            activeBuyerId: parsed?.session?.activeBuyerId || null,
+            buyerType: parsed?.session?.buyerType === "merchant" ? "merchant" : "buyer",
+            route: parsed?.session?.route || "/",
+            rider: parsed?.session?.rider || null,
+            pollarSession: parsed?.session?.pollarSession || {
+              authenticated: false,
+              provider: null,
+              email: "",
+              name: "",
+              pollarUserId: null,
+              stellarAddress: null,
+            },
+          },
+        };
+      } catch {
+        return createInitialDbSnapshot();
+      }
+    }
+
+    function savePersistedDb(snapshot) {
+      try {
+        window.localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(snapshot));
+      } catch {
+        // Ignora errores de cuota si el almacenamiento está lleno
+      }
+    }
+
+    // "Modo Megas": Redimensiona (máx. 1080px) y comprime a WebP ligero (< 80 KB)
+    function estimateDataUrlBytes(dataUrl) {
+      const idx = dataUrl.indexOf(",");
+      if (idx === -1) return dataUrl.length;
+      const b64 = dataUrl.slice(idx + 1);
+      return Math.floor((b64.length * 3) / 4);
+    }
+
+    function compressImageToWebP(file, callback) {
+      if (!file) return;
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        const maxDim = 1080;
+        const maxBytes = 80 * 1024;
+        const natW = img.naturalWidth || img.width || 1;
+        const natH = img.naturalHeight || img.height || 1;
+        const scale = Math.min(1, maxDim / Math.max(natW, natH));
+        let w = Math.max(1, Math.round(natW * scale));
+        let h = Math.max(1, Math.round(natH * scale));
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        const probe = document.createElement("canvas");
+        probe.width = 2;
+        probe.height = 2;
+        const mime = probe.toDataURL("image/webp", 0.5).startsWith("data:image/webp")
+          ? "image/webp"
+          : "image/jpeg";
+        const qualities = [0.8, 0.7, 0.6, 0.5, 0.4, 0.32, 0.25];
+        let best = "";
+        let bestBytes = Infinity;
+
+        for (let pass = 0; pass < 4; pass++) {
+          canvas.width = w;
+          canvas.height = h;
+          ctx.clearRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+          for (const q of qualities) {
+            const out = canvas.toDataURL(mime, q);
+            const bytes = estimateDataUrlBytes(out);
+            if (bytes < bestBytes) {
+              best = out;
+              bestBytes = bytes;
+            }
+            if (bytes <= maxBytes) {
+              callback(out);
+              return;
+            }
+          }
+          w = Math.max(320, Math.round(w * 0.78));
+          h = Math.max(320, Math.round(h * 0.78));
+        }
+        callback(best);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (typeof reader.result === "string") callback(reader.result);
+        };
+        reader.readAsDataURL(file);
+      };
+      img.src = objectUrl;
+    }
+
+    function ProtectedPurchaseBar({ deliveryStatus, orderStatus, amountBs, compact }) {
+      const statusLower = (deliveryStatus || "").toLowerCase();
+      const isDelivered = statusLower === "delivered" || orderStatus === "RELEASED";
+      const isInTransit = statusLower === "in_transit";
+      const fillPercent = isDelivered ? 100 : isInTransit ? 72 : 42;
+
+      const steps = [
+        {
+          num: 1,
+          done: true,
+          active: false,
+          label: amountBs
+            ? `Pago guardado de forma segura (${Math.round(amountBs)} Bs retenidos).`
+            : "Pago guardado de forma segura (Bs retenidos).",
+        },
+        {
+          num: 2,
+          done: isInTransit || isDelivered,
+          active: !isInTransit && !isDelivered,
+          label: isInTransit
+            ? "Pedido listo y en camino con tu repartidor ecológico."
+            : "La caserita está preparando tu pedido.",
+        },
+        {
+          num: 3,
+          done: isDelivered,
+          active: isInTransit && !isDelivered,
+          label: "Pedido entregado → Pago liberado a la caserita.",
+        },
+      ];
+
+      return (
+        <div className={`rounded-2xl bg-[#0F1A16] border border-brote/50 ${compact ? "p-3 space-y-2.5" : "p-4 space-y-3"}`}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-extrabold uppercase tracking-wider text-brote">
+              🛡️ Compra Protegida
+            </span>
+            <span className="px-2.5 py-0.5 rounded-full bg-brote/15 border border-brote/40 text-[11px] font-bold text-arena">
+              Comisión: 0 Bs — Cubierta por EcoBanco
+            </span>
+          </div>
+          {!compact && (
+            <p className="text-xs text-arena/90 leading-relaxed">
+              Tu dinero se guarda seguro y solo pasa a la caserita cuando recibes tu pedido.
+            </p>
+          )}
+          <div className="w-full h-2.5 rounded-full bg-bosque border border-arena/20 overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-oro via-brillo to-brote transition-all duration-500"
+              style={{ width: `${fillPercent}%` }}
+            />
+          </div>
+          <ol className="space-y-2">
+            {steps.map((step) => (
+              <li
+                key={step.num}
+                className={`flex items-start gap-2.5 text-xs leading-snug ${
+                  step.done ? "text-arena font-semibold" : step.active ? "text-brillo font-bold" : "text-arena/70"
+                }`}
+              >
+                <span
+                  className={`mt-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-extrabold shrink-0 ${
+                    step.done
+                      ? "bg-brote text-bosque"
+                      : step.active
+                      ? "bg-oro text-bosque"
+                      : "bg-bosque border border-arena/30 text-arena/75"
+                  }`}
+                >
+                  {step.done ? "✓" : step.num}
+                </span>
+                <span>{step.label}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      );
+    }
+
+    function EcoBancoApp() {
+      const [initialSnapshot] = useState(() => loadPersistedDb());
+      const [route, setRoute] = useState(initialSnapshot.session.route || "/");
+      const [products, setProducts] = useState(initialSnapshot.tables.products);
+      const [orders, setOrders] = useState(initialSnapshot.tables.orders);
+      const [deliveries, setDeliveries] = useState(initialSnapshot.tables.deliveries);
+      const [rampTransactions, setRampTransactions] = useState(initialSnapshot.tables.rampTransactions || []);
+      const [storageBuckets, setStorageBuckets] = useState(initialSnapshot.storage);
+      const [users, setUsers] = useState(initialSnapshot.tables.users);
+      const [activeMerchantId, setActiveMerchantId] = useState(initialSnapshot.session.activeMerchantId);
+      const [activeBuyerId, setActiveBuyerId] = useState(initialSnapshot.session.activeBuyerId);
+      const [rider, setRider] = useState(initialSnapshot.session.rider);
+      const [pollarSession, setPollarSession] = useState(initialSnapshot.session.pollarSession);
+      const [pollarLoginModalRole, setPollarLoginModalRole] = useState(null);
+      const [pollarEmailDraft, setPollarEmailDraft] = useState("");
+      const [pollarOtpStep, setPollarOtpStep] = useState("choose");
+      const [pollarOtpCode, setPollarOtpCode] = useState("");
+      const [merchantView, setMerchantView] = useState("catalogo");
+      const [dismissProfilePrompt, setDismissProfilePrompt] = useState(false);
+
+      // Ingreso / Registro Caserita con PIN de 4 números
+      const [authTab, setAuthTab] = useState("login");
+      const [authError, setAuthError] = useState(null);
+      const [loginIdentifier, setLoginIdentifier] = useState("");
+      const [loginPhone, setLoginPhone] = useState("");
+      const [loginPin, setLoginPin] = useState("");
+      const [regOwnerName, setRegOwnerName] = useState("");
+      const [regStoreName, setRegStoreName] = useState("");
+      const [regPhone, setRegPhone] = useState("");
+      const [regPin, setRegPin] = useState("");
+      const [quickPinInput, setQuickPinInput] = useState("");
+      const [dismissPinSetup, setDismissPinSetup] = useState(false);
+
+      // Perfil y Ajustes de Caserita
+      const initialActiveMerchant =
+        initialSnapshot.tables.users.find(
+          (u) => u.role === "merchant" && u.id === initialSnapshot.session.activeMerchantId
+        ) || null;
+      const [cfgStoreName, setCfgStoreName] = useState(initialActiveMerchant?.storeName || "");
+      const [cfgPassword, setCfgPassword] = useState(initialActiveMerchant?.password || "");
+      const [cfgStoreDescription, setCfgStoreDescription] = useState(initialActiveMerchant?.storeDescription || "");
+      const [cfgAddress, setCfgAddress] = useState(initialActiveMerchant?.address || "");
+      const [cfgSchedule, setCfgSchedule] = useState(initialActiveMerchant?.schedule || "");
+      const [cfgAvatarUrl, setCfgAvatarUrl] = useState(initialActiveMerchant?.avatarUrl || "");
+      const [cfgBankQrUrl, setCfgBankQrUrl] = useState(initialActiveMerchant?.bankQrUrl || "");
+      const [cfgMessage, setCfgMessage] = useState(null);
+      const [cfgError, setCfgError] = useState(null);
+
+      // Modal Alta Rápida de Producto (3 bloques + vista previa)
+      const [isModalOpen, setIsModalOpen] = useState(false);
+      const [productStep, setProductStep] = useState("edit");
+      const [editingProduct, setEditingProduct] = useState(null);
+      const [formName, setFormName] = useState("");
+      const [formPrice, setFormPrice] = useState("");
+      const [formDescription, setFormDescription] = useState("");
+      const [formImageUrl, setFormImageUrl] = useState("");
+      const [productError, setProductError] = useState(null);
+      const priceInputRef = useRef(null);
+
+      // Modal Cargar saldo con QR de tu Banco (Pollar RampWidget BO / BOB -> USDC)
+      const [qrModalOpen, setQrModalOpen] = useState(false);
+      const [qrAmountBs, setQrAmountBs] = useState("100");
+      const [qrStep, setQrStep] = useState("amount");
+      const [qrPurpose, setQrPurpose] = useState("fiat_topup");
+      const [qrTargetRole, setQrTargetRole] = useState("buyer");
+      const [qrOrderId, setQrOrderId] = useState("");
+      const [qrError, setQrError] = useState(null);
+      const [qrNotice, setQrNotice] = useState(null);
+
+      // Mercado del Barrio & Checkout
+      const [buyerType, setBuyerType] = useState(initialSnapshot.session.buyerType || "buyer");
+      const [searchQuery, setSearchQuery] = useState("");
+      const [pendingProduct, setPendingProduct] = useState(null);
+      const [editingCheckoutContact, setEditingCheckoutContact] = useState(false);
+      const [buyerNameInput, setBuyerNameInput] = useState("");
+      const [buyerEmailInput, setBuyerEmailInput] = useState("");
+      const [buyerPhoneInput, setBuyerPhoneInput] = useState("");
+      const [buyerAddressInput, setBuyerAddressInput] = useState("");
+      const [lazyError, setLazyError] = useState(null);
+      const [purchaseError, setPurchaseError] = useState(null);
+      const [lastReceipt, setLastReceipt] = useState(null);
+      const [lastDelivery, setLastDelivery] = useState(null);
+
+      // Perfil Vecino
+      const [upgradeBanner, setUpgradeBanner] = useState(null);
+      const [referralBanner, setReferralBanner] = useState(null);
+      const [editPhoneInput, setEditPhoneInput] = useState("");
+      const [editDeliveryAddressInput, setEditDeliveryAddressInput] = useState("");
+      const [contactMsg, setContactMsg] = useState(null);
+      const [contactError, setContactError] = useState(null);
+
+      // Panel Repartidor de Barrio
+      const [riderTab, setRiderTab] = useState("disponibles");
+      const [riderNameInput, setRiderNameInput] = useState(initialSnapshot.session.rider?.name || "");
+      const [riderPhoneInput, setRiderPhoneInput] = useState(initialSnapshot.session.rider?.phone || "");
+      const [riderVehicleInput, setRiderVehicleInput] = useState(
+        initialSnapshot.session.rider?.vehicleType || "bicicleta"
+      );
+      const [riderAddressInput, setRiderAddressInput] = useState(initialSnapshot.session.rider?.address || "");
+      const [riderCiInput, setRiderCiInput] = useState(initialSnapshot.session.rider?.ciNumber || "");
+      const [riderSelfieUrlInput, setRiderSelfieUrlInput] = useState(initialSnapshot.session.rider?.selfieUrl || "");
+      const [riderCiPhotoUrlInput, setRiderCiPhotoUrlInput] = useState(initialSnapshot.session.rider?.ciPhotoUrl || "");
+      const [copiedCode, setCopiedCode] = useState(false);
+      const [riderAuthError, setRiderAuthError] = useState(null);
+      const [pinInputs, setPinInputs] = useState({});
+      const [riderMsg, setRiderMsg] = useState(null);
+      const [riderError, setRiderError] = useState(null);
+
+      useEffect(() => {
+        savePersistedDb({
+          tables: { users, products, orders, deliveries, rampTransactions },
+          storage: storageBuckets,
+          session: { activeMerchantId, activeBuyerId, buyerType, route, rider, pollarSession },
+        });
+      }, [users, products, orders, deliveries, rampTransactions, storageBuckets, activeMerchantId, activeBuyerId, buyerType, route, rider, pollarSession]);
+
+      const syncPollarAddressToRole = (role, pollarUserId, stellarAddress) => {
+        if (!pollarUserId && !stellarAddress) return;
+        if (role === "merchant" && activeMerchantId) {
+          setUsers((prev) =>
+            prev.map((u) =>
+              u.id === activeMerchantId
+                ? {
+                    ...u,
+                    pollar_user_id: pollarUserId || u.pollar_user_id || null,
+                    stellar_address: stellarAddress || u.stellar_address || null,
+                  }
+                : u
+            )
+          );
+        } else if (role === "buyer" && activeBuyerId) {
+          setUsers((prev) =>
+            prev.map((u) =>
+              u.id === activeBuyerId
+                ? {
+                    ...u,
+                    pollar_user_id: pollarUserId || u.pollar_user_id || null,
+                    stellar_address: stellarAddress || u.stellar_address || null,
+                  }
+                : u
+            )
+          );
+        } else if (role === "rider" && rider) {
+          setRider((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  pollar_user_id: pollarUserId || prev.pollar_user_id || null,
+                  stellar_address: stellarAddress || prev.stellar_address || null,
+                }
+              : prev
+          );
+          setUsers((prev) =>
+            prev.map((u) =>
+              u.id === rider.id
+                ? {
+                    ...u,
+                    pollar_user_id: pollarUserId || u.pollar_user_id || null,
+                    stellar_address: stellarAddress || u.stellar_address || null,
+                  }
+                : u
+            )
+          );
+        }
+      };
+
+      const completePollarPreviewAuth = (role, provider, emailValue) => {
+        const cleanEmail = (emailValue || "vecino@ecobanco.bo").trim().toLowerCase();
+        const seed = `${provider}:${cleanEmail}`;
+        const pollarUserId = `plr_${Math.abs(
+          seed.split("").reduce((acc, ch) => Math.imul(acc, 31) + ch.charCodeAt(0), 7)
+        )}`;
+        const stellarAddress = generateClassicStellarPreviewAddress(seed);
+        const nextSession = {
+          authenticated: true,
+          provider,
+          email: cleanEmail,
+          name: cleanEmail.split("@")[0] || "Vecino EcoBanco",
+          pollarUserId,
+          stellarAddress,
+        };
+        setPollarSession(nextSession);
+        setPollarLoginModalRole(null);
+        setPollarOtpStep("choose");
+        setPollarOtpCode("");
+
+        if (role === "buyer" && !buyerEmailInput.trim()) {
+          setBuyerEmailInput(cleanEmail);
+        }
+
+        if (role === "merchant" && !activeMerchantId) {
+          const matchedMerchant = users.find(
+            (u) =>
+              u.role === "merchant" &&
+              ((u.pollar_user_id && u.pollar_user_id === pollarUserId) ||
+                (u.stellar_address && u.stellar_address === stellarAddress))
+          );
+          if (matchedMerchant) {
+            setActiveMerchantId(matchedMerchant.id);
+            syncConfigFields(matchedMerchant);
+            setMerchantView("catalogo");
+          }
+        } else if (role === "buyer" && !activeBuyerId) {
+          const matchedBuyer = users.find(
+            (u) =>
+              u.role === "buyer" &&
+              !isRiderUserRow(u) &&
+              ((u.pollar_user_id && u.pollar_user_id === pollarUserId) ||
+                (u.email || "").toLowerCase() === cleanEmail)
+          );
+          if (matchedBuyer) {
+            setUsers((prev) =>
+              prev.map((u) => {
+                if (u.id === matchedBuyer.id) {
+                  return {
+                    ...u,
+                    isLoggedIn: true,
+                    pollar_user_id: pollarUserId || u.pollar_user_id || null,
+                    stellar_address: stellarAddress || u.stellar_address || null,
+                  };
+                }
+                if (u.role === "buyer" && !isRiderUserRow(u) && u.isLoggedIn) {
+                  return { ...u, isLoggedIn: false };
+                }
+                return u;
+              })
+            );
+            setActiveBuyerId(matchedBuyer.id);
+          }
+        } else if (role === "rider" && !rider?.isLoggedIn) {
+          const matchedRider = users.find(
+            (u) =>
+              isRiderUserRow(u) &&
+              ((u.pollar_user_id && u.pollar_user_id === pollarUserId) ||
+                (u.stellar_address && u.stellar_address === stellarAddress))
+          );
+          if (matchedRider) {
+            setRider({
+              id: matchedRider.id,
+              name: matchedRider.name || nextSession.name,
+              phone: matchedRider.phone || "",
+              vehicleType: matchedRider.store_name === "moto_electrica" ? "moto_electrica" : "bicicleta",
+              address: matchedRider.address || "",
+              ciNumber: matchedRider.ci_number || "",
+              selfieUrl: matchedRider.selfie_url || "",
+              ciPhotoUrl: matchedRider.ci_photo_url || "",
+              riderVerified: Boolean(matchedRider.rider_verified),
+              riderInviteCode: matchedRider.rider_invite_code || matchedRider.riderInviteCode || "",
+              isLoggedIn: true,
+              motesEnabled: true,
+              fiatWalletEnabled: true,
+              motesEarned: Number(matchedRider.motes ?? 0),
+              completedDeliveries: 0,
+              pollar_user_id: pollarUserId || matchedRider.pollar_user_id || null,
+              stellar_address: stellarAddress || matchedRider.stellar_address || null,
+              createdAt: matchedRider.created_at || new Date().toISOString(),
+            });
+          }
+        }
+
+        syncPollarAddressToRole(role, pollarUserId, stellarAddress);
+      };
+
+      const openPollarQrModal = (targetRole, purpose, defaultAmount) => {
+        setQrTargetRole(targetRole);
+        setQrPurpose(purpose);
+        setQrAmountBs(String(Math.round(defaultAmount || 100)));
+        setQrOrderId(`ord_plr_${Date.now()}`);
+        setQrError(null);
+        setQrNotice(null);
+        setQrStep("amount");
+        setQrModalOpen(true);
+      };
+
+      const confirmPollarRampOrderPreview = () => {
+        setQrError(null);
+        if (!pollarSession?.authenticated || !pollarSession?.stellarAddress) {
+          setQrError("Debes conectar primero tu cuenta Pollar (Google o Email OTP) para acreditar la orden.");
+          return;
+        }
+        const amount = Math.round(Number(qrAmountBs));
+        if (!Number.isFinite(amount) || amount < 10) {
+          setQrError("Ingresa un monto válido en Bolivianos (mínimo 10 Bs).");
+          return;
+        }
+        if ((qrPurpose === "prosumer_subscription" || qrPurpose === "merchant_premium") && amount < SUBSCRIPTION_COST) {
+          setQrError(`Esta activación requiere al menos ${SUBSCRIPTION_COST} Bs.`);
+          return;
+        }
+        const cleanOrderId = (qrOrderId || "").trim();
+        if (!cleanOrderId || rampTransactions.some((t) => t.pollar_order_id === cleanOrderId)) {
+          setQrError("Esta orden de Pollar ya fue acreditada anteriormente.");
+          return;
+        }
+
+        const targetUserId = qrTargetRole === "merchant" ? activeMerchantId : activeBuyerId;
+        if (!targetUserId) {
+          setQrError("Inicia sesión primero antes de acreditar una recarga.");
+          return;
+        }
+
+        const txRecord = {
+          id: `ramp-${Date.now()}`,
+          pollar_order_id: cleanOrderId,
+          user_id: targetUserId,
+          role: qrTargetRole,
+          purpose: qrPurpose,
+          amount_bs: amount,
+          fiat_currency: "BOB",
+          asset_code: "USDC",
+          stellar_address: pollarSession.stellarAddress,
+          created_at: new Date().toISOString(),
+        };
+        setRampTransactions((prev) => [txRecord, ...prev]);
+
+        setUsers((prev) =>
+          prev.map((u) => {
+            if (u.id !== targetUserId) return u;
+            const curFiat = Number(u.fiatBs ?? 0);
+            const curMotes = Number(u.motes ?? 0);
+            const curFree = Number(u.free_deliveries_remaining ?? u.freeDeliveries ?? 0);
+            if (qrPurpose === "prosumer_subscription" && !u.isProsumer) {
+              const remainder = Math.max(0, amount - SUBSCRIPTION_COST);
+              return {
+                ...u,
+                isProsumer: true,
+                isPremium: true,
+                motesEnabled: true,
+                motes_enabled: true,
+                fiatWalletEnabled: true,
+                qrEnabled: true,
+                fiatBs: curFiat + remainder,
+                motes: curMotes + 50,
+                freeDeliveries: curFree + PREMIUM_FREE_DELIVERIES,
+                free_deliveries_remaining: curFree + PREMIUM_FREE_DELIVERIES,
+                pollar_user_id: pollarSession.pollarUserId || u.pollar_user_id || null,
+                stellar_address: pollarSession.stellarAddress || u.stellar_address || null,
+              };
+            }
+            if (qrPurpose === "merchant_premium" && !u.isProsumer && !u.isPremium) {
+              const remainder = Math.max(0, amount - SUBSCRIPTION_COST);
+              return {
+                ...u,
+                isProsumer: true,
+                isPremium: true,
+                fiatWalletEnabled: true,
+                qrEnabled: true,
+                fiatBs: curFiat + remainder,
+                freeDeliveries: curFree + PREMIUM_FREE_DELIVERIES,
+                free_deliveries_remaining: curFree + PREMIUM_FREE_DELIVERIES,
+                pollar_user_id: pollarSession.pollarUserId || u.pollar_user_id || null,
+                stellar_address: pollarSession.stellarAddress || u.stellar_address || null,
+              };
+            }
+            return {
+              ...u,
+              fiatWalletEnabled: true,
+              fiatBs: curFiat + amount,
+              pollar_user_id: pollarSession.pollarUserId || u.pollar_user_id || null,
+              stellar_address: pollarSession.stellarAddress || u.stellar_address || null,
+            };
+          })
+        );
+
+        if (qrPurpose === "prosumer_subscription") {
+          setUpgradeBanner(`¡Club Vecino activado con orden Pollar ${cleanOrderId}! Se acreditaron +50 MOTES y 5 envíos ecológicos.`);
+        } else if (qrPurpose === "merchant_premium") {
+          setCfgMessage(`¡Caserita Aliada activada con orden Pollar ${cleanOrderId}!`);
+        } else if (qrTargetRole === "merchant") {
+          setCfgMessage(`¡Recarga real de ${amount} Bs acreditada (Orden ${cleanOrderId})!`);
+        } else {
+          setQrNotice(`¡Recarga real de ${amount} Bs acreditada (Orden ${cleanOrderId})!`);
+        }
+        setQrModalOpen(false);
+      };
+
+      const uploadToBucket = (bucket, file, onDone) => {
+        compressImageToWebP(file, (dataUrl) => {
+          const objectPath = `${activeMerchantId || "ecobanco"}/${Date.now()}.webp`;
+          setStorageBuckets((prev) => ({
+            ...prev,
+            [bucket]: {
+              ...(prev[bucket] || {}),
+              [objectPath]: dataUrl,
+            },
+          }));
+          onDone(dataUrl);
+        });
+      };
+
+      const merchants = users.filter((u) => u.role === "merchant");
+      const activeMerchant = merchants.find((m) => m.id === activeMerchantId) || null;
+      const activeBuyer =
+        users.find((u) => u.role === "buyer" && !isRiderUserRow(u) && u.id === activeBuyerId) ||
+        users.find((u) => u.role === "buyer" && !isRiderUserRow(u) && u.isLoggedIn) ||
+        null;
+
+      useEffect(() => {
+        if (activeBuyer) {
+          setEditPhoneInput(activeBuyer.phone || "");
+          setEditDeliveryAddressInput(activeBuyer.deliveryAddress || activeBuyer.delivery_address || activeBuyer.address || "");
+        }
+      }, [activeBuyerId, activeBuyer?.phone, activeBuyer?.deliveryAddress, activeBuyer?.delivery_address]);
+
+      const syncConfigFields = (mer) => {
+        setCfgStoreName(mer.storeName || "");
+        setCfgPassword(mer.password || "");
+        setCfgStoreDescription(mer.storeDescription || "");
+        setCfgAddress(mer.address || "");
+        setCfgSchedule(mer.schedule || "");
+        setCfgAvatarUrl(mer.avatarUrl || "");
+        setCfgBankQrUrl(mer.bankQrUrl || "");
+      };
+
+      // --- Ingreso y Registro de Caserita ---
+      const handleMerchantLogin = (e) => {
+        e.preventDefault();
+        setAuthError(null);
+        const normalize = (str) =>
+          (str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+
+        const cleanId = normalize(loginIdentifier);
+        const cleanPhone = loginPhone.replace(/\s+/g, "").trim();
+        const cleanPin = loginPin.replace(/\D/g, "").slice(0, 4);
+
+        const found = merchants.find(
+          (m) => normalize(m.storeName) === cleanId || normalize(m.ownerName) === cleanId
+        );
+
+        if (!found) {
+          setAuthError("No encontramos un puesto con ese nombre.");
+          return;
+        }
+
+        if (cleanPin.length === 4 && found.password === cleanPin) {
+          setActiveMerchantId(found.id);
+          syncConfigFields(found);
+          setDismissProfilePrompt(false);
+          setDismissPinSetup(false);
+          setMerchantView("catalogo");
+          setLoginIdentifier("");
+          setLoginPhone("");
+          setLoginPin("");
+          return;
+        }
+
+        if (cleanPhone && (found.password === cleanPhone || found.phone === cleanPhone)) {
+          let updatedMer = found;
+          if (cleanPin.length === 4) {
+            updatedMer = { ...found, password: cleanPin };
+            setUsers((prev) => prev.map((u) => (u.id === found.id ? updatedMer : u)));
+            setCfgMessage("¡Bienvenida! Guardamos tu clave secreta de 4 números para tus próximos ingresos.");
+            setDismissPinSetup(true);
+          } else {
+            setDismissPinSetup(false);
+          }
+          setActiveMerchantId(updatedMer.id);
+          syncConfigFields(updatedMer);
+          setDismissProfilePrompt(false);
+          setMerchantView("catalogo");
+          setLoginIdentifier("");
+          setLoginPhone("");
+          setLoginPin("");
+          return;
+        }
+
+        setAuthError("Revisa tu WhatsApp o tu clave secreta de 4 números.");
+      };
+
+      const handleMerchantRegister = (e) => {
+        e.preventDefault();
+        setAuthError(null);
+        const cleanOwner = regOwnerName.trim();
+        const cleanStore = regStoreName.trim();
+        const cleanPhone = regPhone.replace(/\s+/g, "").trim();
+        const cleanPin = regPin.replace(/\D/g, "").slice(0, 4);
+
+        if (!cleanOwner || !cleanStore || !cleanPhone) {
+          setAuthError("Completa tu nombre, nombre de puesto y WhatsApp.");
+          return;
+        }
+        if (cleanPin.length !== 4) {
+          setAuthError("Crea tu clave secreta de 4 números (como la del cajero).");
+          return;
+        }
+
+        const exists = merchants.find(
+          (m) => m.phone === cleanPhone || m.storeName.toLowerCase() === cleanStore.toLowerCase()
+        );
+        if (exists) {
+          setAuthError("Ya existe una caserita registrada con ese puesto o número de WhatsApp.");
+          return;
+        }
+
+        const newMer = {
+          id: `mer-${Date.now()}`,
+          role: "merchant",
+          ownerName: cleanOwner,
+          storeName: cleanStore,
+          phone: cleanPhone,
+          password: cleanPin,
+          storeDescription: "",
+          address: "",
+          schedule: "",
+          avatarUrl: "",
+          profileCompleted: false,
+          bankQrUrl: "",
+          isProsumer: false,
+          isPremium: false,
+          fiatWalletEnabled: false,
+          qrEnabled: false,
+          motesEnabled: true,
+          motes: 0,
+          fiatBs: 0,
+          freeDeliveries: 0,
+          free_deliveries_remaining: 0,
+          salesCount: 0,
+          pollar_user_id: pollarSession?.pollarUserId || null,
+          stellar_address: pollarSession?.stellarAddress || null,
+        };
+
+        setUsers((prev) => [...prev, newMer]);
+        setActiveMerchantId(newMer.id);
+        syncConfigFields(newMer);
+        setDismissProfilePrompt(false);
+        setDismissPinSetup(true);
+        setMerchantView("catalogo");
+        setRegOwnerName("");
+        setRegStoreName("");
+        setRegPhone("");
+        setRegPin("");
+      };
+
+      const handleSaveQuickPin = (e) => {
+        e.preventDefault();
+        const cleanPin = quickPinInput.replace(/\D/g, "").slice(0, 4);
+        if (cleanPin.length !== 4 || !activeMerchant) {
+          setCfgError("Escribe exactamente 4 números para tu clave secreta.");
+          return;
+        }
+        setUsers((prev) =>
+          prev.map((m) => (m.id === activeMerchant.id ? { ...m, password: cleanPin } : m))
+        );
+        setCfgPassword(cleanPin);
+        setQuickPinInput("");
+        setDismissPinSetup(true);
+        setCfgMessage("¡Clave secreta de 4 números guardada! Ya puedes ingresar con tu PIN.");
+      };
+
+      const handleQuickAvatarUpload = (e) => {
+        const file = e.target.files?.[0];
+        uploadToBucket(BUCKETS.AVATARS, file, (dataUrl) => {
+          setCfgAvatarUrl(dataUrl);
+          setUsers((prev) =>
+            prev.map((m) => {
+              if (m.id !== activeMerchantId) return m;
+              const isComplete = Boolean(m.storeDescription?.trim() && m.address?.trim() && m.schedule?.trim() && dataUrl);
+              return { ...m, avatarUrl: dataUrl, profileCompleted: isComplete };
+            })
+          );
+          setProducts((prev) =>
+            prev.map((p) => (p.sellerId === activeMerchantId ? { ...p, sellerAvatarUrl: dataUrl } : p))
+          );
+        });
+      };
+
+      const handleBankQrUpload = (e) => {
+        const file = e.target.files?.[0];
+        uploadToBucket(BUCKETS.QR_BANCARIOS, file, (dataUrl) => {
+          setCfgBankQrUrl(dataUrl);
+          setUsers((prev) =>
+            prev.map((m) =>
+              m.id === activeMerchantId && (m.isProsumer || m.qrEnabled) ? { ...m, bankQrUrl: dataUrl } : m
+            )
+          );
+          setCfgMessage("Tu QR bancario quedó guardado y listo para recibir cobros.");
+        });
+      };
+
+      const handleCompleteOnboardingProfile = (e) => {
+        e.preventDefault();
+        setCfgError(null);
+        setCfgMessage(null);
+        if (!cfgStoreDescription.trim() || !cfgAddress.trim() || !cfgSchedule.trim() || !cfgAvatarUrl) {
+          setCfgError("Completa la descripción, dirección, horario y sube la foto de tu puesto.");
+          return;
+        }
+        setUsers((prev) =>
+          prev.map((m) =>
+            m.id === activeMerchant.id
+              ? {
+                  ...m,
+                  storeDescription: cfgStoreDescription.trim(),
+                  address: cfgAddress.trim(),
+                  schedule: cfgSchedule.trim(),
+                  avatarUrl: cfgAvatarUrl,
+                  profileCompleted: true,
+                }
+              : m
+          )
+        );
+        setProducts((prev) =>
+          prev.map((p) =>
+            p.sellerId === activeMerchant.id
+              ? { ...p, sellerAvatarUrl: cfgAvatarUrl, sellerAddress: cfgAddress.trim(), sellerSchedule: cfgSchedule.trim() }
+              : p
+          )
+        );
+        setDismissProfilePrompt(true);
+        setCfgMessage("¡Tu puesto digital está listo para recibir pedidos!");
+      };
+
+      const handleSaveConfig = (e) => {
+        e.preventDefault();
+        if (!activeMerchant) return;
+        setCfgError(null);
+        const oldStore = activeMerchant.storeName;
+        const newStore = cfgStoreName.trim() || oldStore;
+        const isComplete = Boolean(cfgStoreDescription.trim() && cfgAddress.trim() && cfgSchedule.trim() && cfgAvatarUrl);
+        setUsers((prev) =>
+          prev.map((m) =>
+            m.id === activeMerchant.id
+              ? {
+                  ...m,
+                  storeName: newStore,
+                  password: cfgPassword.trim() || m.password,
+                  storeDescription: cfgStoreDescription.trim(),
+                  address: cfgAddress.trim(),
+                  schedule: cfgSchedule.trim(),
+                  avatarUrl: cfgAvatarUrl,
+                  profileCompleted: isComplete,
+                  bankQrUrl: m.isProsumer ? cfgBankQrUrl : m.bankQrUrl,
+                }
+              : m
+          )
+        );
+        setProducts((prev) =>
+          prev.map((p) =>
+            p.sellerId === activeMerchant.id || p.sellerName === oldStore
+              ? { ...p, sellerName: newStore, sellerAvatarUrl: cfgAvatarUrl, sellerAddress: cfgAddress.trim(), sellerSchedule: cfgSchedule.trim() }
+              : p
+          )
+        );
+        setCfgMessage("Cambios guardados correctamente.");
+      };
+
+      const handleUnlockAliada = (paymentMethod) => {
+        if (!activeMerchant) return;
+        setCfgError(null);
+        setCfgMessage(null);
+        if (paymentMethod === "motes" && activeMerchant.motes < SUBSCRIPTION_COST) {
+          setCfgError(`Te faltan ${SUBSCRIPTION_COST - activeMerchant.motes} MOTES en ventas para activarlo gratis.`);
+          return;
+        }
+        let deductFiat = false;
+        if (paymentMethod === "fiat") {
+          if (Number(activeMerchant.fiatBs ?? 0) >= SUBSCRIPTION_COST) {
+            deductFiat = true;
+          } else {
+            openPollarQrModal("merchant", "merchant_premium", SUBSCRIPTION_COST);
+            return;
+          }
+        }
+        setUsers((prev) =>
+          prev.map((m) => {
+            if (m.id !== activeMerchant.id || m.isProsumer) return m;
+            if (paymentMethod === "motes") {
+              return {
+                ...m,
+                isProsumer: true,
+                isPremium: true,
+                fiatWalletEnabled: true,
+                qrEnabled: true,
+                motes: m.motes - SUBSCRIPTION_COST,
+                freeDeliveries: Number(m.freeDeliveries ?? 0) + PREMIUM_FREE_DELIVERIES,
+                free_deliveries_remaining: Number(m.free_deliveries_remaining ?? 0) + PREMIUM_FREE_DELIVERIES,
+              };
+            }
+            return {
+              ...m,
+              isProsumer: true,
+              isPremium: true,
+              fiatWalletEnabled: true,
+              qrEnabled: true,
+              fiatBs: deductFiat ? Number(m.fiatBs ?? 0) - SUBSCRIPTION_COST : Number(m.fiatBs ?? 0),
+              freeDeliveries: Number(m.freeDeliveries ?? 0) + PREMIUM_FREE_DELIVERIES,
+              free_deliveries_remaining: Number(m.free_deliveries_remaining ?? 0) + PREMIUM_FREE_DELIVERIES,
+            };
+          })
+        );
+        setCfgMessage(
+          paymentMethod === "motes"
+            ? "¡Ya eres Caserita Aliada con tus 100 MOTES! Tu cobro directo a QR bancario y 5 envíos ecológicos gratis ya están activos."
+            : "¡Pago de 100 Bs confirmado! Conservas todos tus MOTES y ya tienes activos tu cobro directo a QR bancario y 5 envíos ecológicos gratis."
+        );
+      };
+
+      const handleContinueToProductPreview = (e) => {
+        e.preventDefault();
+        setProductError(null);
+        if (!formImageUrl) {
+          setProductError("Primero sube una foto real de tu producto.");
+          return;
+        }
+        if (!formName.trim() || Number(formPrice) <= 0) {
+          setProductError("Escribe el nombre del producto y un precio en Bolivianos (Bs).");
+          return;
+        }
+        setProductStep("preview");
+      };
+
+      const handleConfirmPublishProduct = () => {
+        const resolvedPrice = Math.round(Number(formPrice));
+        const resolvedDesc =
+          formDescription.trim() || `${formName.trim()} — Producto fresco de ${activeMerchant.storeName}.`;
+
+        if (editingProduct) {
+          setProducts((prev) =>
+            prev.map((p) =>
+              p.id === editingProduct.id
+                ? { ...p, name: formName.trim(), priceMotes: resolvedPrice, description: resolvedDesc, imageUrl: formImageUrl }
+                : p
+            )
+          );
+        } else {
+          setProducts((prev) => [
+            {
+              id: `prod-${Date.now()}`,
+              sellerId: activeMerchant.id,
+              sellerName: activeMerchant.storeName,
+              sellerPhone: activeMerchant.phone,
+              sellerAvatarUrl: activeMerchant.avatarUrl,
+              sellerAddress: activeMerchant.address,
+              sellerSchedule: activeMerchant.schedule,
+              name: formName.trim(),
+              priceMotes: resolvedPrice,
+              description: resolvedDesc,
+              imageUrl: formImageUrl,
+            },
+            ...prev,
+          ]);
+        }
+        setIsModalOpen(false);
+        setCfgMessage(editingProduct ? "Producto actualizado." : "¡Producto publicado! Ya está visible para tus vecinos.");
+      };
+
+      // --- Mercado del Barrio & Compra Protegida ---
+      const executeProtectedPurchase = (product, role, buyerOverride) => {
+        setPurchaseError(null);
+        const buyerUser = role === "merchant" ? activeMerchant : buyerOverride || activeBuyer;
+        if (!buyerUser) {
+          setPurchaseError("Completa tus datos de entrega antes de confirmar.");
+          return;
+        }
+        const deliveryAddress = (buyerUser.deliveryAddress || buyerUser.delivery_address || buyerUser.address || "").trim();
+        if (role === "buyer" && (!String(buyerUser.phone || "").trim() || !deliveryAddress)) {
+          setPurchaseError("Completa tu WhatsApp y dirección de entrega para confirmar tu pedido.");
+          return;
+        }
+
+        const priceMotes = Math.round(Number(product.priceMotes));
+        const buyerMotes = Number(buyerUser.motes ?? 0);
+        const buyerFiatBs = Number(buyerUser.fiatBs ?? 0);
+        const buyerMotesEnabled =
+          role === "merchant" || Boolean(buyerUser.motesEnabled || buyerUser.motes_enabled || buyerUser.isProsumer);
+
+        if (role === "merchant" && buyerMotes < priceMotes) {
+          setPurchaseError("No tienes suficientes Puntos de Trueque (MOTES) para este pedido.");
+          return;
+        }
+
+        let nextBuyerMotes = buyerMotes;
+        let nextBuyerFiat = buyerFiatBs;
+        if (buyerMotesEnabled && buyerMotes >= priceMotes) {
+          nextBuyerMotes = buyerMotes - priceMotes;
+        } else if (role === "buyer" && buyerFiatBs >= priceMotes) {
+          nextBuyerFiat = buyerFiatBs - priceMotes;
+        } else {
+          setPurchaseError(
+            `Saldo insuficiente para confirmar esta compra (${priceMotes} Bs). Tu saldo actual es ${buyerFiatBs} Bs${buyerMotesEnabled ? ` y ${buyerMotes} MOTES` : ""}.`
+          );
+          return;
+        }
+
+        const sellerAccount = users.find(
+          (u) =>
+            u.role === "merchant" &&
+            (u.id === product.sellerId ||
+              (u.storeName && u.storeName.toLowerCase() === (product.sellerName || "").toLowerCase()))
+        );
+        const sellerFreeDeliveries = Number(sellerAccount?.free_deliveries_remaining ?? sellerAccount?.freeDeliveries ?? 0);
+        const usedFreeDelivery = Boolean(sellerAccount && sellerFreeDeliveries > 0);
+
+        setUsers((prev) =>
+          prev.map((u) => {
+            if (sellerAccount && u.id === sellerAccount.id && u.id === buyerUser.id) {
+              return {
+                ...u,
+                motes: nextBuyerMotes,
+                ...(usedFreeDelivery
+                  ? { freeDeliveries: sellerFreeDeliveries - 1, free_deliveries_remaining: sellerFreeDeliveries - 1 }
+                  : {}),
+              };
+            }
+            if (u.id === buyerUser.id) {
+              return { ...u, motes: nextBuyerMotes, fiatBs: nextBuyerFiat };
+            }
+            if (sellerAccount && u.id === sellerAccount.id && usedFreeDelivery) {
+              return { ...u, freeDeliveries: sellerFreeDeliveries - 1, free_deliveries_remaining: sellerFreeDeliveries - 1 };
+            }
+            return u;
+          })
+        );
+
+        const ts = Date.now();
+        const nowIso = new Date().toISOString();
+        const orderId = `ord-${ts}`;
+        const contractId = `PED-${Math.floor(1000 + Math.random() * 9000)}`;
+        const pickupPin = generateFourDigitPin();
+        const deliveryPin = generateFourDigitPin(pickupPin);
+
+        const newOrder = {
+          id: orderId,
+          contract_id: contractId,
+          product_id: product.id,
+          product_name: product.name,
+          seller_id: sellerAccount?.id || product.sellerId || null,
+          seller_name: sellerAccount?.storeName || product.sellerName,
+          buyer_id: buyerUser.id,
+          buyer_type: role,
+          amount_motes: priceMotes,
+          status: "LOCKED_IN_ESCROW",
+          created_at: nowIso,
+        };
+
+        const newDelivery = {
+          id: `del-${ts}`,
+          order_id: orderId,
+          contract_id: contractId,
+          product_name: product.name,
+          amount_motes: priceMotes,
+          buyer_id: buyerUser.id,
+          buyer_name: buyerUser.storeName || buyerUser.name || "Vecino",
+          delivery_address: deliveryAddress || "Entrega en tu barrio",
+          seller_id: sellerAccount?.id || product.sellerId || null,
+          seller_name: sellerAccount?.storeName || product.sellerName,
+          seller_phone: sellerAccount?.phone || product.sellerPhone || null,
+          pickup_address: sellerAccount?.address || product.sellerAddress || "Puesto de la Caserita",
+          delivery_status: "pending",
+          used_free_delivery: usedFreeDelivery,
+          subsidized_by_reserve: usedFreeDelivery,
+          vehicle_type: "Entrega Ecológica",
+          pickup_pin: pickupPin,
+          delivery_pin: deliveryPin,
+          delivery_fee_motes: RIDER_DELIVERY_FEE_BS,
+          rider_id: null,
+          rider_name: null,
+          rider_phone: null,
+          created_at: nowIso,
+        };
+
+        setOrders((prev) => [newOrder, ...prev]);
+        setDeliveries((prev) => [newDelivery, ...prev]);
+        setLastReceipt({ contractId, productName: product.name, amountMotes: priceMotes, status: "LOCKED_IN_ESCROW" });
+        setLastDelivery(newDelivery);
+        setPendingProduct(null);
+      };
+
+      const hasSavedBuyerContact = Boolean(
+        activeBuyer?.isLoggedIn &&
+          String(activeBuyer.phone || "").trim() &&
+          String(activeBuyer.deliveryAddress || activeBuyer.delivery_address || activeBuyer.address || "").trim()
+      );
+
+      const handleBuyClick = (product) => {
+        setPurchaseError(null);
+        setLazyError(null);
+        if (activeBuyer) {
+          setBuyerNameInput(activeBuyer.name || "");
+          setBuyerEmailInput(activeBuyer.email || "");
+          setBuyerPhoneInput(activeBuyer.phone || "");
+          setBuyerAddressInput(activeBuyer.deliveryAddress || activeBuyer.delivery_address || activeBuyer.address || "");
+        }
+        setEditingCheckoutContact(!hasSavedBuyerContact);
+        setPendingProduct(product);
+      };
+
+      const handleCheckoutSubmit = (e) => {
+        e.preventDefault();
+        if (!pendingProduct) return;
+        setLazyError(null);
+
+        if (isMerchantBuying) {
+          executeProtectedPurchase(pendingProduct, "merchant");
+          return;
+        }
+
+        if (!hasSavedBuyerContact || editingCheckoutContact) {
+          const cleanName = buyerNameInput.trim();
+          const cleanEmail = buyerEmailInput.trim().toLowerCase();
+          const cleanPhone = buyerPhoneInput.replace(/\s+/g, "").trim();
+          const cleanAddress = buyerAddressInput.trim();
+
+          if (!cleanName || !cleanEmail || !cleanPhone || !cleanAddress) {
+            setLazyError("Completa tu nombre, correo, WhatsApp de contacto y dirección de entrega.");
+            return;
+          }
+
+          const existingBuyer = users.find(
+            (u) =>
+              u.role === "buyer" &&
+              !isRiderUserRow(u) &&
+              ((u.email || "").toLowerCase() === cleanEmail || u.phone === cleanPhone)
+          );
+          const phoneConflict = users.find((u) => u.phone === cleanPhone && u.id !== existingBuyer?.id);
+          if (phoneConflict) {
+            setLazyError("Ese número de WhatsApp ya está registrado en otra cuenta.");
+            return;
+          }
+
+          let targetBuyer;
+          if (existingBuyer) {
+            const isClub = Boolean(existingBuyer.isProsumer || existingBuyer.motesEnabled || existingBuyer.motes_enabled);
+            targetBuyer = {
+              ...existingBuyer,
+              name: cleanName,
+              email: cleanEmail,
+              phone: cleanPhone,
+              address: cleanAddress,
+              deliveryAddress: cleanAddress,
+              delivery_address: cleanAddress,
+              isLoggedIn: true,
+              fiatWalletEnabled: true,
+              motesEnabled: isClub,
+              motes_enabled: isClub,
+              motes: isClub ? Number(existingBuyer.motes ?? 0) : 0,
+              pollar_user_id: pollarSession?.pollarUserId || existingBuyer.pollar_user_id || null,
+              stellar_address: pollarSession?.stellarAddress || existingBuyer.stellar_address || null,
+            };
+            setUsers((prev) =>
+              prev.map((u) => {
+                if (u.id === existingBuyer.id) return targetBuyer;
+                if (u.role === "buyer" && !isRiderUserRow(u) && u.isLoggedIn) return { ...u, isLoggedIn: false };
+                return u;
+              })
+            );
+          } else {
+            targetBuyer = {
+              id: `usr-${Date.now()}`,
+              role: "buyer",
+              name: cleanName,
+              email: cleanEmail,
+              phone: cleanPhone,
+              address: cleanAddress,
+              deliveryAddress: cleanAddress,
+              delivery_address: cleanAddress,
+              isLoggedIn: true,
+              isProsumer: false,
+              isPremium: false,
+              fiatWalletEnabled: true,
+              motesEnabled: false,
+              motes_enabled: false,
+              qrEnabled: false,
+              motes: 0,
+              fiatBs: 0,
+              freeDeliveries: 0,
+              free_deliveries_remaining: 0,
+              referralCode: generateReferralCode(cleanName),
+              invitedCount: 0,
+              pollar_user_id: pollarSession?.pollarUserId || null,
+              stellar_address: pollarSession?.stellarAddress || null,
+            };
+            setUsers((prev) => [
+              ...prev.map((u) =>
+                u.role === "buyer" && !isRiderUserRow(u) && u.isLoggedIn ? { ...u, isLoggedIn: false } : u
+              ),
+              targetBuyer,
+            ]);
+          }
+
+          setActiveBuyerId(targetBuyer.id);
+          setBuyerType("buyer");
+          executeProtectedPurchase(pendingProduct, "buyer", targetBuyer);
+          return;
+        }
+
+        executeProtectedPurchase(pendingProduct, "buyer");
+      };
+
+      // --- Perfil Vecino (Club Vecino 100 Bs/mes) ---
+      const handleBuyerUpdateContact = (e) => {
+        e.preventDefault();
+        setContactMsg(null);
+        setContactError(null);
+        if (!activeBuyer) return;
+        const cleanPhone = editPhoneInput.replace(/\s+/g, "").trim();
+        const cleanAddr = editDeliveryAddressInput.trim();
+        if (!cleanPhone || !cleanAddr) {
+          setContactError("El número de WhatsApp y la dirección de entrega son obligatorios.");
+          return;
+        }
+        setUsers((prev) =>
+          prev.map((u) =>
+            u.id === activeBuyer.id
+              ? { ...u, phone: cleanPhone, address: cleanAddr, deliveryAddress: cleanAddr, delivery_address: cleanAddr }
+              : u
+          )
+        );
+        setContactMsg("WhatsApp y dirección de entrega actualizados.");
+      };
+
+      const handleBuyerJoinClubVecino = () => {
+        if (!activeBuyer || activeBuyer.isProsumer) return;
+        const currentFiat = Number(activeBuyer.fiatBs ?? 0);
+        if (currentFiat < SUBSCRIPTION_COST) {
+          openPollarQrModal("buyer", "prosumer_subscription", SUBSCRIPTION_COST);
+          return;
+        }
+        setUsers((prev) =>
+          prev.map((u) => {
+            if (u.id !== activeBuyer.id) return u;
+            return {
+              ...u,
+              isProsumer: true,
+              isPremium: true,
+              motesEnabled: true,
+              motes_enabled: true,
+              fiatWalletEnabled: true,
+              qrEnabled: true,
+              fiatBs: Number(u.fiatBs ?? 0) - SUBSCRIPTION_COST,
+              motes: Number(u.motes ?? 0) + 50,
+              freeDeliveries: Number(u.freeDeliveries ?? 0) + 5,
+              free_deliveries_remaining: Number(u.free_deliveries_remaining ?? 0) + 5,
+            };
+          })
+        );
+        setUpgradeBanner(
+          "¡Bienvenido al Club Vecino (100 Bs/mes)! Tu billetera de MOTES ya está activa con +50 MOTES y 5 envíos ecológicos incluidos."
+        );
+      };
+
+      const handleBuyerReferralReward = () => {
+        if (!activeBuyer) return;
+        const code = activeBuyer.referralCode || "ECO-VECINO";
+        const msg = `¡Hola vecino! Te invito a EcoBanco Bolivia. Regístrate con mi código: ${code}`;
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(code).catch(() => {});
+        }
+        window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank", "noopener,noreferrer");
+        setReferralBanner(
+          `Código ${code} copiado. Tu bono se acreditará automáticamente cuando un usuario nuevo real se registre usando tu código.`
+        );
+      };
+
+      // --- Repartidor de Barrio ---
+      const handleRiderOnboarding = (e) => {
+        e.preventDefault();
+        setRiderAuthError(null);
+        const cleanName = riderNameInput.trim();
+        const cleanPhone = riderPhoneInput.replace(/\s+/g, "").trim();
+        const cleanAddress = riderAddressInput.trim();
+        const cleanCi = riderCiInput.trim();
+        const cleanSelfie = riderSelfieUrlInput.trim();
+        const cleanCiPhoto = riderCiPhotoUrlInput.trim();
+
+        if (!cleanName || !cleanPhone || !cleanAddress || !cleanCi || !cleanSelfie || !cleanCiPhoto) {
+          setRiderAuthError("Completa tus datos y sube tu selfie frontal del rostro descubierto y la foto de tu Carnet de Identidad (CI).");
+          return;
+        }
+
+        const existingUserRider = users.find((u) => isRiderUserRow(u) && u.phone === cleanPhone);
+        const isSameRider = Boolean(existingUserRider) || (rider && rider.phone === cleanPhone);
+        const riderId = existingUserRider?.id || (rider && rider.phone === cleanPhone ? rider.id : `rid-${Date.now()}`);
+        const existingCode =
+          existingUserRider?.rider_invite_code ||
+          existingUserRider?.riderInviteCode ||
+          (rider && rider.phone === cleanPhone ? rider.riderInviteCode : "");
+        const riderInviteCode =
+          existingCode && existingCode.startsWith("ECO-R-") ? existingCode : generateUniqueRiderInviteCode(users);
+
+        const nextRider = {
+          id: riderId,
+          name: cleanName,
+          phone: cleanPhone,
+          vehicleType: riderVehicleInput === "moto_electrica" ? "moto_electrica" : "bicicleta",
+          address: cleanAddress,
+          ciNumber: cleanCi,
+          selfieUrl: cleanSelfie,
+          ciPhotoUrl: cleanCiPhoto,
+          riderVerified: true,
+          riderInviteCode,
+          isLoggedIn: true,
+          motesEnabled: true,
+          fiatWalletEnabled: true,
+          motesEarned: isSameRider ? Number(rider?.motesEarned ?? existingUserRider?.motes ?? 0) : 0,
+          completedDeliveries: isSameRider ? Number(rider?.completedDeliveries ?? 0) : 0,
+          pollar_user_id: pollarSession?.pollarUserId || existingUserRider?.pollar_user_id || rider?.pollar_user_id || null,
+          stellar_address: pollarSession?.stellarAddress || existingUserRider?.stellar_address || rider?.stellar_address || null,
+          createdAt: isSameRider ? rider?.createdAt || new Date().toISOString() : new Date().toISOString(),
+        };
+
+        setUsers((prev) => {
+          const riderRow = {
+            id: nextRider.id,
+            role: "rider",
+            name: nextRider.name,
+            phone: nextRider.phone,
+            store_name: nextRider.vehicleType,
+            address: nextRider.address,
+            ci_number: nextRider.ciNumber,
+            selfie_url: nextRider.selfieUrl,
+            ci_photo_url: nextRider.ciPhotoUrl,
+            rider_verified: true,
+            rider_invite_code: nextRider.riderInviteCode,
+            motes_enabled: true,
+            fiat_wallet_enabled: true,
+            motes: nextRider.motesEarned,
+            pollar_user_id: nextRider.pollar_user_id || null,
+            stellar_address: nextRider.stellar_address || null,
+          };
+          const exists = prev.some((u) => u.id === nextRider.id);
+          return exists ? prev.map((u) => (u.id === nextRider.id ? { ...u, ...riderRow } : u)) : [...prev, riderRow];
+        });
+
+        setRider(nextRider);
+        setRiderMsg("¡Credencial oficial activada! Ya puedes tomar pedidos del barrio.");
+        setRiderTab("disponibles");
+      };
+
+      const handleCopyInviteCode = async () => {
+        if (!rider?.riderInviteCode) return;
+        try {
+          await navigator.clipboard.writeText(rider.riderInviteCode);
+        } catch {}
+        setCopiedCode(true);
+        setTimeout(() => setCopiedCode(false), 2500);
+      };
+
+      const handleAcceptDelivery = (deliveryId) => {
+        if (!rider?.isLoggedIn || !rider?.riderVerified) return;
+        setRiderMsg(null);
+        setRiderError(null);
+        const vehicleLabel = rider.vehicleType === "moto_electrica" ? "Moto Eléctrica" : "Bicicleta";
+        setDeliveries((prev) =>
+          prev.map((d) =>
+            d.id === deliveryId
+              ? { ...d, rider_id: rider.id, rider_name: rider.name, rider_phone: rider.phone, vehicle_type: vehicleLabel }
+              : d
+          )
+        );
+        setRiderMsg("Pedido asignado. Pasa por el puesto de la caserita y dile el código de recojo.");
+        setRiderTab("en_curso");
+      };
+
+      const handleValidatePickupPin = (deliveryId) => {
+        setRiderMsg(null);
+        setRiderError(null);
+        const del = deliveries.find((d) => d.id === deliveryId);
+        if (!del) return;
+        const enteredPin = (pinInputs[deliveryId] || "").trim();
+        if (!enteredPin || enteredPin !== del.pickup_pin) {
+          setRiderError("Código de recojo incorrecto. Revísalo con la caserita.");
+          return;
+        }
+        setDeliveries((prev) =>
+          prev.map((d) =>
+            d.id === deliveryId ? { ...d, delivery_status: "in_transit", picked_up_at: new Date().toISOString() } : d
+          )
+        );
+        setPinInputs((prev) => ({ ...prev, [deliveryId]: "" }));
+        setRiderMsg("¡Recojo confirmado! Lleva el pedido al vecino y valida el código al entregar.");
+      };
+
+      const handleValidateDeliveryPin = (deliveryId) => {
+        setRiderMsg(null);
+        setRiderError(null);
+        const del = deliveries.find((d) => d.id === deliveryId);
+        if (!del) return;
+        const enteredPin = (pinInputs[deliveryId] || "").trim();
+        if (!enteredPin || enteredPin !== del.delivery_pin) {
+          setRiderError("Código de entrega incorrecto. Revísalo con el vecino.");
+          return;
+        }
+
+        const order = orders.find((o) => o.id === del.order_id);
+        if (order && order.status !== "RELEASED") {
+          setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, status: "RELEASED" } : o)));
+          setUsers((prev) =>
+            prev.map((u) => {
+              if (
+                u.role === "merchant" &&
+                (u.id === (order.seller_id || del.seller_id) ||
+                  (u.storeName && u.storeName.toLowerCase() === (order.seller_name || "").toLowerCase()))
+              ) {
+                return {
+                  ...u,
+                  motes: Number(u.motes ?? 0) + Number(order.amount_motes ?? 0),
+                  salesCount: Number(u.salesCount ?? 0) + 1,
+                };
+              }
+              return u;
+            })
+          );
+        }
+
+        setDeliveries((prev) =>
+          prev.map((d) =>
+            d.id === deliveryId ? { ...d, delivery_status: "delivered", delivered_at: new Date().toISOString() } : d
+          )
+        );
+
+        const feeBs = Math.round(Number(del.delivery_fee_motes ?? RIDER_DELIVERY_FEE_BS));
+        setRider((prev) =>
+          prev
+            ? {
+                ...prev,
+                motesEarned: Number(prev.motesEarned ?? 0) + feeBs,
+                completedDeliveries: Number(prev.completedDeliveries ?? 0) + 1,
+              }
+            : prev
+        );
+
+        setPinInputs((prev) => ({ ...prev, [deliveryId]: "" }));
+        setRiderMsg("¡Entrega confirmada! El pago pasó a la caserita y tu ganancia ya está en tu libreta.");
+        setRiderTab("ganancias");
+      };
+
+      // --- Datos enriquecidos ---
+      const isMerchantBuying = buyerType === "merchant" && !!activeMerchant;
+      const myProducts = activeMerchant
+        ? products.filter((p) => p.sellerId === activeMerchant.id || p.sellerName === activeMerchant.storeName)
+        : [];
+
+      const enrichedProducts = products.map((p) => {
+        const seller = merchants.find(
+          (m) => m.id === p.sellerId || (m.storeName && m.storeName.toLowerCase() === (p.sellerName || "").toLowerCase())
+        );
+        return {
+          ...p,
+          sellerName: seller?.storeName || p.sellerName,
+          sellerAvatarUrl: seller?.avatarUrl || p.sellerAvatarUrl || "",
+          sellerAddress: seller?.address || p.sellerAddress || "",
+          sellerSchedule: seller?.schedule || p.sellerSchedule || "",
+          sellerFreeDeliveries: Number(seller?.free_deliveries_remaining ?? seller?.freeDeliveries ?? 0),
+        };
+      });
+
+      const filteredProducts = enrichedProducts.filter((p) => {
+        const q = searchQuery.toLowerCase();
+        return (
+          p.name.toLowerCase().includes(q) ||
+          (p.sellerName || "").toLowerCase().includes(q) ||
+          (p.description || "").toLowerCase().includes(q) ||
+          (p.sellerAddress || "").toLowerCase().includes(q)
+        );
+      });
+
+      const isProfileIncomplete =
+        activeMerchant &&
+        !activeMerchant.profileCompleted &&
+        (!activeMerchant.storeDescription?.trim() ||
+          !activeMerchant.address?.trim() ||
+          !activeMerchant.schedule?.trim() ||
+          !activeMerchant.avatarUrl);
+
+      const needsFourDigitPin = Boolean(
+        activeMerchant && !dismissPinSetup && !/^\d{4}$/.test(String(activeMerchant.password || "").trim())
+      );
+
+      const currentMotes = Math.round(activeMerchant ? activeMerchant.motes : 0);
+      const canUnlockWithMotes = currentMotes >= SUBSCRIPTION_COST;
+      const motesProgressPct = Math.min(100, Math.round((currentMotes / SUBSCRIPTION_COST) * 100));
+      const motesRemaining = Math.max(0, SUBSCRIPTION_COST - currentMotes);
+
+      const orderById = new Map(orders.map((o) => [o.id, o]));
+      const deliveryByOrderId = new Map(deliveries.map((d) => [d.order_id, d]));
+
+      const myMerchantDeliveries = activeMerchant
+        ? deliveries.filter(
+            (d) =>
+              d.seller_id === activeMerchant.id ||
+              (d.seller_name || "").toLowerCase() === (activeMerchant.storeName || "").toLowerCase()
+          )
+        : [];
+
+      const myMerchantProtectedPending = activeMerchant
+        ? orders
+            .filter(
+              (o) =>
+                (o.seller_id === activeMerchant.id ||
+                  (o.seller_name || "").toLowerCase() === (activeMerchant.storeName || "").toLowerCase()) &&
+                o.status !== "RELEASED"
+            )
+            .reduce((acc, o) => acc + Number(o.amount_motes || 0), 0)
+        : 0;
+
+      const myBuyerOrders = activeBuyer ? orders.filter((o) => o.buyer_id === activeBuyer.id) : [];
+
+      const availableDeliveries = deliveries.filter(
+        (d) => normalizeDeliveryStatus(d.delivery_status) === "pending" && !d.rider_id
+      );
+      const inProgressDeliveries = deliveries.filter((d) => {
+        const st = normalizeDeliveryStatus(d.delivery_status);
+        if (st === "in_transit") return !rider || !d.rider_id || d.rider_id === rider.id;
+        if (st === "pending" && rider && d.rider_id === rider.id) return true;
+        return false;
+      });
+      const completedDeliveries = deliveries.filter((d) => {
+        const st = normalizeDeliveryStatus(d.delivery_status);
+        return st === "delivered" && (!rider || !d.rider_id || d.rider_id === rider.id);
+      });
+      const riderSubsidizedCount = completedDeliveries.filter(
+        (d) => d.subsidized_by_reserve || d.used_free_delivery
+      ).length;
+
+      const buyerHasActiveMotes = Boolean(
+        activeBuyer?.isProsumer || activeBuyer?.motesEnabled || activeBuyer?.motes_enabled || Number(activeBuyer?.motes ?? 0) > 0
+      );
+
+      return (
+        <div className="min-h-screen bg-bosque text-arena font-sans">
+          {/* 1. PANTALLA PRINCIPAL (Sincronizada 100% con app/page.tsx) */}
+          {route === "/" && (
+            <div className="min-h-screen flex flex-col justify-center px-5 py-6">
+              <main className="w-full max-w-md sm:max-w-xl mx-auto space-y-6 sm:space-y-8 text-center">
+                <header className="flex flex-col items-center justify-center space-y-3">
+                  <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-gradient-to-br from-oro via-brillo to-madera p-1.5 shadow-gold-glow flex items-center justify-center">
+                    <div className="w-full h-full rounded-full bg-gradient-to-b from-madera via-[#4d2d14] to-bosque flex items-center justify-center border border-brillo/40">
+                      <span className="text-4xl sm:text-5xl">🌱</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <h1 className="font-brand text-4xl sm:text-6xl text-transparent bg-clip-text bg-gradient-to-b from-brillo via-oro to-[#b87d14]">
+                      EcoBanco
+                    </h1>
+                    <p className="text-xs font-extrabold uppercase tracking-[0.45em] text-arena pl-1.5">
+                      BOLIVIA
+                    </p>
+                  </div>
+                </header>
+
+                <section className="space-y-2.5 px-1">
+                  <h2 className="font-brand text-2xl sm:text-3xl text-arena leading-snug">
+                    Tu mercado del barrio,{" "}
+                    <span className="text-brillo">
+                      sin comisiones y con entrega ecológica
+                    </span>
+                  </h2>
+                  <p className="text-sm sm:text-base font-semibold text-arena/90 leading-relaxed max-w-md mx-auto">
+                    Compra y vende en tu zona, recuperando nuestro valor en comunidad
+                  </p>
+                </section>
+
+                <section className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 pt-1">
+                  <button
+                    onClick={() => setRoute("/panel-caserita")}
+                    className="rounded-2xl p-6 sm:p-8 bg-gradient-to-br from-oro via-brillo to-[#c58316] text-bosque shadow-gold-glow active:scale-[0.98] transition-all border-2 border-[#fff3cc]/80 flex flex-col items-center justify-center text-center space-y-3"
+                  >
+                    <div className="w-16 h-16 rounded-2xl bg-bosque/15 border border-bosque/25 flex items-center justify-center text-3xl">
+                      🏪
+                    </div>
+                    <div className="space-y-1.5">
+                      <span className="block font-brand text-2xl sm:text-3xl text-bosque">
+                        QUIERO VENDER
+                      </span>
+                      <p className="text-sm font-bold text-bosque leading-snug">
+                        Abre tu puesto digital gratis y recibe pedidos por WhatsApp
+                      </p>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setBuyerType("buyer");
+                      setRoute("/marketplace");
+                    }}
+                    className="rounded-2xl p-6 sm:p-8 bg-gradient-to-br from-[#1C3628] via-[#172C22] to-[#112019] text-arena shadow-green-glow active:scale-[0.98] transition-all border-2 border-brote flex flex-col items-center justify-center text-center space-y-3"
+                  >
+                    <div className="w-16 h-16 rounded-2xl bg-brote/25 border border-brote/60 flex items-center justify-center text-3xl">
+                      🛒
+                    </div>
+                    <div className="space-y-1.5">
+                      <span className="block font-brand text-2xl sm:text-3xl text-brillo">
+                        QUIERO COMPRAR
+                      </span>
+                      <p className="text-sm font-semibold text-arena leading-snug">
+                        Pide comida, abarrotes y productos de tus caseritas cercanas
+                      </p>
+                    </div>
+                  </button>
+                </section>
+
+                <footer className="pt-2">
+                  <button
+                    onClick={() => setRoute("/panel-rider")}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#192A23] hover:bg-[#22382E] border-2 border-oro/45 hover:border-brillo text-sm font-bold text-arena hover:text-brillo transition-all"
+                  >
+                    <span>🚲</span>
+                    <span>Repartidor de Barrio (Bici / Moto Eléctrica)</span>
+                    <span className="text-brillo font-extrabold">→</span>
+                  </button>
+                </footer>
+              </main>
+            </div>
+          )}
+
+          {/* 2. INGRESO / REGISTRO DE CASERITAS CON PIN DE 4 NÚMEROS */}
+          {route === "/panel-caserita" && !activeMerchant && (
+            <div className="min-h-screen flex flex-col justify-center px-4 py-8">
+              <div className="max-w-md w-full mx-auto space-y-5">
+                <button
+                  onClick={() => setRoute("/")}
+                  className="px-4 py-2.5 rounded-xl bg-[#182822] border border-arena/25 text-sm font-bold text-arena"
+                >
+                  ← Inicio
+                </button>
+
+                <div className="rounded-2xl bg-gradient-to-b from-[#1B2C26] to-[#121D19] border-2 border-oro/60 p-6 sm:p-8 shadow-gold-glow space-y-6">
+                  <div className="text-center space-y-2">
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-oro via-brillo to-madera p-0.5 flex items-center justify-center">
+                      <div className="w-full h-full rounded-2xl bg-bosque flex items-center justify-center text-3xl">
+                        🏪
+                      </div>
+                    </div>
+                    <h1 className="font-brand text-2xl sm:text-3xl text-arena">
+                      Puesto de la Caserita
+                    </h1>
+                    <p className="text-sm text-arena/90">
+                      Abre tu puesto digital gratis y recibe pedidos por WhatsApp.
+                    </p>
+                    <span className="inline-block px-3 py-1 rounded-full bg-brote/20 border border-brote/60 text-xs font-extrabold text-arena">
+                      Comisión: 0 Bs — Cubierta por EcoBanco
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-bosque border border-arena/20">
+                    <button
+                      type="button"
+                      onClick={() => { setAuthTab("login"); setAuthError(null); }}
+                      className={`py-3 rounded-xl text-sm font-extrabold uppercase tracking-wider transition ${
+                        authTab === "login" ? "bg-gradient-to-r from-oro to-brillo text-bosque shadow" : "text-arena/85"
+                      }`}
+                    >
+                      Ingresar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setAuthTab("register"); setAuthError(null); }}
+                      className={`py-3 rounded-xl text-sm font-extrabold uppercase tracking-wider transition ${
+                        authTab === "register" ? "bg-gradient-to-r from-brote to-[#5cd060] text-bosque shadow" : "text-arena/85"
+                      }`}
+                    >
+                      Abrir Puesto
+                    </button>
+                  </div>
+
+                  <div className="rounded-2xl bg-[#101C18] border border-oro/40 p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-brillo">
+                        ✨ Billetera Stellar (Pollar · Testnet)
+                      </span>
+                      <span className="text-[11px] font-bold text-brote">USDC patrocinado</span>
+                    </div>
+                    {pollarSession?.authenticated && pollarSession?.stellarAddress ? (
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-bosque border border-brote/50 px-3 py-2">
+                        <span className="font-mono text-xs font-extrabold text-brillo">
+                          G… {formatShortStellarAddress(pollarSession.stellarAddress)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPollarLoginModalRole("merchant")}
+                          className="text-xs font-extrabold text-brote underline"
+                        >
+                          Cambiar cuenta
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setPollarLoginModalRole("merchant")}
+                        className="w-full py-3 rounded-xl bg-gradient-to-r from-[#1E3329] to-[#273824] border-2 border-oro/55 text-brillo font-extrabold text-xs uppercase tracking-wide"
+                      >
+                        🔐 Conectar con Pollar (Google / Email OTP)
+                      </button>
+                    )}
+                    <p className="text-[11px] text-arena/75 text-center">
+                      Compatible 100% con el ingreso telefónico de Doña Eliana (73540555).
+                    </p>
+                  </div>
+
+                  {authError && (
+                    <div className="p-3.5 rounded-xl bg-red-500/20 border border-red-400/60 text-sm font-bold text-red-100 text-center">
+                      ⚠️ {authError}
+                    </div>
+                  )}
+
+                  {authTab === "login" ? (
+                    <form onSubmit={handleMerchantLogin} className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-arena mb-1">
+                          Tu Nombre o Nombre de tu Puesto *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={loginIdentifier}
+                          onChange={(e) => setLoginIdentifier(e.target.value)}
+                          placeholder="Ej. Doña Eliana"
+                          className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-arena mb-1">
+                          Número de WhatsApp
+                        </label>
+                        <input
+                          type="tel"
+                          value={loginPhone}
+                          onChange={(e) => setLoginPhone(e.target.value)}
+                          placeholder="Ej. 73540555"
+                          className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-brillo mb-1">
+                          Clave secreta de 4 números (PIN)
+                        </label>
+                        <input
+                          type="password"
+                          inputMode="numeric"
+                          maxLength="4"
+                          value={loginPin}
+                          onChange={(e) => setLoginPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                          placeholder="• • • •"
+                          className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-oro/50 font-mono text-2xl font-bold tracking-[0.4em] text-center text-brillo"
+                        />
+                        <p className="text-xs text-arena/85 mt-1.5">
+                          🔐 Crea tu clave secreta de 4 números (como la del cajero). Si entras por primera vez con tu WhatsApp, déjalo vacío o escribe tu nuevo PIN ahora.
+                        </p>
+                      </div>
+                      <button
+                        type="submit"
+                        className="w-full py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg shadow-gold-glow border-2 border-[#fff3cc]/70"
+                      >
+                        Entrar a mi Puesto
+                      </button>
+                    </form>
+                  ) : (
+                    <form onSubmit={handleMerchantRegister} className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-arena mb-1">
+                          1. Tu Nombre Completo *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={regOwnerName}
+                          onChange={(e) => setRegOwnerName(e.target.value)}
+                          placeholder="Ej. Juana Mamani"
+                          className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-brote/50 text-arena text-base"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-arena mb-1">
+                          2. Nombre de tu Puesto *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={regStoreName}
+                          onChange={(e) => setRegStoreName(e.target.value)}
+                          placeholder="Ej. Salteñas Doña Juana"
+                          className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-brote/50 text-arena text-base"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-arena mb-1">
+                          3. Número de WhatsApp *
+                        </label>
+                        <input
+                          type="tel"
+                          required
+                          value={regPhone}
+                          onChange={(e) => setRegPhone(e.target.value)}
+                          placeholder="Ej. 73540555"
+                          className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-brote/50 text-arena text-base"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-brillo mb-1">
+                          4. Clave secreta de 4 números (PIN) *
+                        </label>
+                        <input
+                          type="password"
+                          inputMode="numeric"
+                          maxLength="4"
+                          required
+                          value={regPin}
+                          onChange={(e) => setRegPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                          placeholder="• • • •"
+                          className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-brote/60 font-mono text-2xl font-bold tracking-[0.4em] text-center text-brillo"
+                        />
+                        <p className="text-xs text-brillo font-semibold mt-1.5">
+                          🔐 Crea tu clave secreta de 4 números (como la del cajero)
+                        </p>
+                      </div>
+                      <button
+                        type="submit"
+                        className="w-full py-4 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-lg shadow-green-glow"
+                      >
+                        Abrir mi Puesto Gratis
+                      </button>
+                    </form>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 2B. PANEL DE LA CASERITA */}
+          {route === "/panel-caserita" && activeMerchant && (
+            <main className="max-w-md sm:max-w-2xl mx-auto px-4 pt-6 pb-16 space-y-6">
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  onClick={() => setRoute("/")}
+                  className="px-4 py-2.5 rounded-xl bg-[#182822] border border-arena/25 text-sm font-bold text-arena"
+                >
+                  ← Inicio
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setCfgMessage(null);
+                      setCfgError(null);
+                      setMerchantView(merchantView === "configuracion" ? "catalogo" : "configuracion");
+                    }}
+                    className={`px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-extrabold border-2 transition ${
+                      merchantView === "configuracion" ? "bg-oro text-bosque border-oro" : "bg-[#1A2923] text-brillo border-oro/50"
+                    }`}
+                  >
+                    ⚙️ {merchantView === "configuracion" ? "Volver al Puesto" : "Ajustes"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveMerchantId(null);
+                      if (buyerType === "merchant") setBuyerType("buyer");
+                      setMerchantView("catalogo");
+                    }}
+                    className="px-3.5 py-2.5 rounded-xl bg-red-500/20 border border-red-400/50 text-red-200 text-xs sm:text-sm font-bold"
+                  >
+                    Salir
+                  </button>
+                </div>
+              </div>
+
+              <header className="rounded-2xl bg-gradient-to-b from-[#1B2C26] to-[#121D19] border-2 border-oro/40 p-4 sm:p-5 space-y-3.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-4 flex-1 min-w-0">
+                    <label className="relative cursor-pointer shrink-0">
+                      <input type="file" accept="image/*" onChange={handleQuickAvatarUpload} className="hidden" />
+                      {activeMerchant.avatarUrl ? (
+                        <img src={activeMerchant.avatarUrl} alt={activeMerchant.storeName} className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl object-cover border-2 border-oro" />
+                      ) : (
+                        <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-bosque border-2 border-dashed border-oro/70 flex flex-col items-center justify-center text-center p-1">
+                          <span className="text-xl">📷</span>
+                          <span className="text-[10px] font-bold text-brillo leading-tight">Subir foto</span>
+                        </div>
+                      )}
+                      <span className="absolute -bottom-1.5 -right-1.5 w-7 h-7 rounded-full bg-oro text-bosque text-xs font-extrabold flex items-center justify-center shadow">
+                        ✎
+                      </span>
+                    </label>
+                    <div className="space-y-1 flex-1 min-w-0">
+                      <div className="flex flex-wrap gap-1.5">
+                        <span className="px-2.5 py-0.5 rounded-full bg-oro/25 border border-oro/60 text-brillo text-xs font-extrabold uppercase">
+                          {activeMerchant.isProsumer ? "⭐ Caserita Aliada" : "🌱 Puesto Gratuito"}
+                        </span>
+                        <span className="px-2.5 py-0.5 rounded-full bg-brote/25 border border-brote/60 text-arena text-xs font-bold">
+                          📱 {activeMerchant.phone}
+                        </span>
+                        {(activeMerchant.stellar_address || pollarSession?.stellarAddress) ? (
+                          <span className="px-2.5 py-0.5 rounded-full bg-bosque border border-oro/55 font-mono text-xs font-extrabold text-brillo">
+                            🌟 {formatShortStellarAddress(activeMerchant.stellar_address || pollarSession?.stellarAddress)} · Testnet USDC
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setPollarLoginModalRole("merchant")}
+                            className="px-2.5 py-0.5 rounded-full bg-oro/20 border border-oro/60 text-xs font-extrabold text-brillo"
+                          >
+                            🔗 Conectar Pollar
+                          </button>
+                        )}
+                      </div>
+                      <h1 className="font-brand text-2xl sm:text-3xl text-arena truncate">{activeMerchant.storeName}</h1>
+                      <p className="text-xs sm:text-sm text-arena/85 truncate">Propietaria: {activeMerchant.ownerName}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-row sm:flex-col gap-2 shrink-0 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCfgMessage(null);
+                        setCfgError(null);
+                        setMerchantView(merchantView === "billeteras" ? "catalogo" : "billeteras");
+                      }}
+                      className={`flex-1 sm:flex-initial px-4 py-3 rounded-xl text-sm font-extrabold border-2 transition flex items-center justify-between gap-2 ${
+                        merchantView === "billeteras" ? "bg-brote text-bosque border-brote" : "bg-[#15241E] text-brillo border-brote/70"
+                      }`}
+                    >
+                      <span>📒 Mi Libreta</span>
+                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-extrabold ${merchantView === "billeteras" ? "bg-bosque text-brillo" : "bg-bosque text-brote"}`}>
+                        {formatMotes(currentMotes)}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBuyerType("merchant");
+                        setRoute("/marketplace");
+                      }}
+                      className="flex-1 sm:flex-initial px-4 py-3 rounded-xl bg-gradient-to-r from-oro to-brillo text-bosque text-sm font-extrabold uppercase tracking-wide shadow flex items-center justify-center gap-1.5"
+                    >
+                      <span>🛒 Comprar en el Barrio</span>
+                    </button>
+                  </div>
+                </div>
+              </header>
+
+              {/* Configuración no bloqueante de PIN para cuentas existentes */}
+              {needsFourDigitPin && (
+                <section className="rounded-2xl bg-[#1D2E25] border-2 border-brillo p-4 sm:p-5 space-y-3 shadow-gold-glow">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <span className="text-xs font-extrabold uppercase text-brillo block">🔐 Acceso rápido con PIN</span>
+                      <h2 className="font-brand text-lg text-arena">
+                        Crea tu clave secreta de 4 números (como la del cajero)
+                      </h2>
+                    </div>
+                    <button type="button" onClick={() => setDismissPinSetup(true)} className="text-xs font-bold text-arena/80">
+                      Más tarde
+                    </button>
+                  </div>
+                  <form onSubmit={handleSaveQuickPin} className="flex flex-col sm:flex-row gap-2.5">
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength="4"
+                      value={quickPinInput}
+                      onChange={(e) => setQuickPinInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                      placeholder="4 números"
+                      className="sm:w-44 px-4 py-3 rounded-xl bg-bosque border-2 border-oro font-mono text-2xl font-bold tracking-[0.35em] text-center text-brillo"
+                    />
+                    <button type="submit" className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-oro to-brillo text-bosque font-brand text-base">
+                      Guardar mi PIN
+                    </button>
+                  </form>
+                </section>
+              )}
+
+              {/* Meta de Desbloqueo hacia 100 MOTES */}
+              {!activeMerchant.isProsumer && (
+                <section className="rounded-2xl bg-gradient-to-r from-[#1A3124] via-[#1E2B1E] to-[#1A2923] border-2 border-brote/70 p-4 sm:p-5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-brillo">
+                      🌟 Tu camino a Caserita Aliada
+                    </span>
+                    <span className="font-brand text-lg text-brillo">
+                      {currentMotes} / {SUBSCRIPTION_COST} MOTES
+                    </span>
+                  </div>
+                  <div className="w-full h-3.5 rounded-full bg-bosque overflow-hidden border border-arena/25">
+                    <div className="h-full bg-gradient-to-r from-brote via-oro to-brillo transition-all duration-500" style={{ width: `${motesProgressPct}%` }} />
+                  </div>
+                  <p className="text-sm font-semibold text-arena leading-snug">
+                    Llevas <strong className="text-brillo">{currentMotes}</strong> de <strong className="text-brillo">100 MOTES</strong> en ventas. Al llegar a 100, desbloqueas gratis: <strong className="text-brote">Cobro directo a tu QR bancario + 5 envíos ecológicos</strong>.
+                  </p>
+                </section>
+              )}
+
+              {/* Completar perfil */}
+              {isProfileIncomplete && !dismissProfilePrompt && (
+                <section className="rounded-2xl bg-gradient-to-b from-[#1E3329] to-[#121F1A] border-2 border-brillo p-5 space-y-4 shadow-gold-glow">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="font-brand text-xl text-arena">Completa los datos de tu puesto</h2>
+                      <p className="text-sm text-arena/90">Así tus vecinos te reconocen fácil en tu zona:</p>
+                    </div>
+                    <button type="button" onClick={() => setDismissProfilePrompt(true)} className="text-xs font-bold text-arena/80">Más tarde</button>
+                  </div>
+                  {cfgError && <div className="p-3 rounded-xl bg-red-500/20 border border-red-400/60 text-sm font-bold text-red-100">{cfgError}</div>}
+                  <form onSubmit={handleCompleteOnboardingProfile} className="space-y-4">
+                    <div className="flex items-center gap-3.5">
+                      {cfgAvatarUrl ? (
+                        <img src={cfgAvatarUrl} alt="Foto" className="w-16 h-16 rounded-2xl object-cover border-2 border-oro" />
+                      ) : (
+                        <div className="w-16 h-16 rounded-2xl bg-bosque border-2 border-dashed border-oro/60 flex items-center justify-center text-2xl">📷</div>
+                      )}
+                      <label className="px-4 py-3 rounded-xl bg-oro/25 text-brillo border-2 border-oro text-xs font-extrabold cursor-pointer">
+                        {cfgAvatarUrl ? "Cambiar Foto" : "Subir Foto del Puesto"}
+                        <input type="file" accept="image/*" onChange={(e) => uploadToBucket(BUCKETS.AVATARS, e.target.files?.[0], setCfgAvatarUrl)} className="hidden" />
+                      </label>
+                    </div>
+                    <textarea rows="2" required value={cfgStoreDescription} onChange={(e) => setCfgStoreDescription(e.target.value)} placeholder="¿Qué vendes en tu puesto?" className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                    <input type="text" required value={cfgAddress} onChange={(e) => setCfgAddress(e.target.value)} placeholder="Dirección o zona de tu puesto" className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                    <input type="text" required value={cfgSchedule} onChange={(e) => setCfgSchedule(e.target.value)} placeholder="Horario de atención" className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                    <button type="submit" className="w-full py-4 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-lg shadow-green-glow">
+                      ✅ Guardar datos de mi puesto
+                    </button>
+                  </form>
+                </section>
+              )}
+
+              {merchantView === "configuracion" ? (
+                <section className="rounded-2xl bg-gradient-to-b from-[#192822] to-[#111C18] border-2 border-oro/50 p-5 sm:p-6 space-y-5">
+                  <h2 className="font-brand text-2xl text-arena">⚙️ Ajustes de tu Puesto</h2>
+                  {cfgMessage && <div className="p-3.5 rounded-xl bg-brote/25 border border-brote text-sm font-bold text-arena">✅ {cfgMessage}</div>}
+                  {cfgError && <div className="p-3.5 rounded-xl bg-red-500/20 border border-red-400/60 text-sm font-bold text-red-100">{cfgError}</div>}
+                  <form onSubmit={handleSaveConfig} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-bold uppercase text-arena mb-1">Nombre de tu Puesto</label>
+                      <input type="text" required value={cfgStoreName} onChange={(e) => setCfgStoreName(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold uppercase text-arena mb-1">Clave secreta de 4 números (PIN)</label>
+                      <input type="text" inputMode="numeric" required value={cfgPassword} onChange={(e) => setCfgPassword(e.target.value.replace(/\D/g, ""))} className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-brillo font-mono font-bold text-lg tracking-widest" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold uppercase text-arena mb-1">Descripción</label>
+                      <textarea rows="2" value={cfgStoreDescription} onChange={(e) => setCfgStoreDescription(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold uppercase text-arena mb-1">Dirección</label>
+                      <input type="text" value={cfgAddress} onChange={(e) => setCfgAddress(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold uppercase text-arena mb-1">Horario</label>
+                      <input type="text" value={cfgSchedule} onChange={(e) => setCfgSchedule(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                    </div>
+
+                    <div className="pt-4 border-t border-arena/20 space-y-3">
+                      <h3 className="font-brand text-xl text-brillo">🌟 Caserita Aliada (QR Bancario + 5 envíos ecológicos)</h3>
+                      {!activeMerchant.isProsumer ? (
+                        <div className="space-y-2.5">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <button type="button" disabled={!canUnlockWithMotes} onClick={() => handleUnlockAliada("motes")} className={`py-3.5 px-3 rounded-xl font-extrabold text-xs uppercase ${canUnlockWithMotes ? "bg-brote text-bosque" : "bg-arena/10 text-arena/65 cursor-not-allowed"}`}>
+                              {canUnlockWithMotes ? "🌱 Activar con 100 MOTES" : `Faltan ${motesRemaining} MOTES`}
+                            </button>
+                            <button type="button" onClick={() => handleUnlockAliada("fiat")} className="py-3.5 px-3 rounded-xl bg-gradient-to-r from-oro to-brillo text-bosque font-extrabold text-xs uppercase">
+                              💵 Activar con 100 Bs (Guardar MOTES)
+                            </button>
+                          </div>
+                          <button type="button" onClick={() => openPollarQrModal("merchant", "merchant_premium", SUBSCRIPTION_COST)} className="w-full py-3.5 rounded-xl bg-[#182B24] border-2 border-oro/60 text-brillo font-extrabold text-sm uppercase">
+                            📲 Cargar saldo con QR de tu Banco (100 Bs)
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-3.5">
+                          {cfgBankQrUrl && <img src={cfgBankQrUrl} alt="QR Bancario" className="w-20 h-20 rounded-xl object-cover border-2 border-oro" />}
+                          <label className="px-4 py-3 rounded-xl bg-brote/25 text-arena border-2 border-brote text-xs font-extrabold cursor-pointer">
+                            📲 Subir tu QR Bancario
+                            <input type="file" accept="image/*" onChange={handleBankQrUpload} className="hidden" />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+
+                    <button type="submit" className="w-full py-4 rounded-2xl bg-brote text-bosque font-brand text-xl shadow-green-glow">
+                      Guardar Ajustes
+                    </button>
+                  </form>
+                </section>
+              ) : merchantView === "billeteras" ? (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="font-brand text-2xl text-arena">📒 Mi Libreta y Pedidos</h2>
+                    <button type="button" onClick={() => setMerchantView("catalogo")} className="px-3.5 py-2 rounded-xl bg-[#182822] border border-arena/25 text-xs font-extrabold text-brillo">
+                      ← Mis Productos
+                    </button>
+                  </div>
+
+                  {cfgMessage && <div className="p-3.5 rounded-2xl bg-brote/25 border border-brote text-sm font-bold text-arena">✅ {cfgMessage}</div>}
+                  {cfgError && <div className="p-3.5 rounded-2xl bg-red-500/20 border border-red-400/60 text-sm font-bold text-red-100">{cfgError}</div>}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="rounded-2xl bg-gradient-to-br from-[#1B3326] via-[#172820] to-[#2B2313] border-2 border-brote p-5 space-y-2">
+                      <span className="text-xs font-extrabold uppercase text-brillo block">Puntos de Trueque (MOTES)</span>
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="font-brand text-4xl text-brillo">{currentMotes}</span>
+                        <span className="text-sm font-extrabold text-brote">MOTES</span>
+                      </div>
+                      <p className="text-xs font-bold text-arena">1 MOTE = 1 Bs en productos del barrio</p>
+                      <p className="text-xs text-arena/85">Comisión: 0 Bs — Cubierta por EcoBanco</p>
+                      {myMerchantProtectedPending > 0 && (
+                        <p className="text-xs font-bold text-brillo">
+                          🛡️ {formatBs(myMerchantProtectedPending)} en Compra Protegida
+                        </p>
+                      )}
+                    </div>
+
+                    {!activeMerchant.isProsumer ? (
+                      <div className="rounded-2xl bg-[#131F1B] border-2 border-oro/50 p-5 flex flex-col justify-between space-y-3">
+                        <span className="text-xs font-extrabold uppercase text-arena">Saldo en Bolivianos (Bs)</span>
+                        <p className="text-xs text-arena/90">
+                          Desbloquea gratis cobro directo a tu QR bancario + 5 envíos ecológicos al llegar a 100 MOTES o cargando 100 Bs.
+                        </p>
+                        <div className="space-y-2">
+                          <button type="button" onClick={() => handleUnlockAliada("fiat")} className="w-full py-3 rounded-xl bg-gradient-to-r from-oro to-brillo text-bosque font-extrabold text-xs uppercase">
+                            💵 Activar con 100 Bs (Guardar MOTES)
+                          </button>
+                          <button type="button" onClick={() => openPollarQrModal("merchant", "merchant_premium", SUBSCRIPTION_COST)} className="w-full py-3 rounded-xl bg-[#182B24] border-2 border-oro/60 text-brillo font-extrabold text-xs uppercase">
+                            📲 Cargar saldo con QR de tu Banco
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl bg-[#1A2A25] border-2 border-oro/70 p-5 space-y-2">
+                        <span className="text-xs font-extrabold uppercase text-arena block">Dinero Disponible (Bs)</span>
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="font-brand text-4xl text-brillo">{Math.round(activeMerchant.fiatBs ?? 0)}</span>
+                          <span className="text-lg font-extrabold text-oro">Bs</span>
+                        </div>
+                        <p className="text-xs font-bold text-brote">
+                          🚲 {activeMerchant.free_deliveries_remaining ?? activeMerchant.freeDeliveries ?? 0} envíos ecológicos gratis
+                        </p>
+                        <button type="button" onClick={() => openPollarQrModal("merchant", "fiat_topup", 100)} className="w-full py-2.5 rounded-xl bg-gradient-to-r from-oro to-brillo text-bosque font-extrabold text-xs uppercase">
+                          📲 Cargar saldo con QR de tu Banco
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Pedidos Entrantes */}
+                  <section className="rounded-2xl bg-[#14221D] border-2 border-oro/40 p-5 space-y-4">
+                    <h3 className="font-brand text-xl text-arena">🚲 Pedidos para Entregar ({myMerchantDeliveries.length})</h3>
+                    {myMerchantDeliveries.length === 0 ? (
+                      <p className="text-sm text-arena/80">Aún no tienes pedidos pendientes.</p>
+                    ) : (
+                      myMerchantDeliveries.map((del) => {
+                        const order = orderById.get(del.order_id);
+                        const orderAmount = Math.round(Number(del.amount_motes ?? order?.amount_motes ?? 0));
+                        return (
+                          <article key={del.id} className="rounded-2xl bg-bosque border-2 border-arena/20 p-4 space-y-3.5">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <span className="font-mono text-xs font-extrabold text-brillo">{formatOrderCode(del.contract_id || order?.contract_id)}</span>
+                                <h4 className="font-brand text-lg text-arena">{del.product_name}</h4>
+                                <p className="text-xs text-arena/85">Vecino: <strong>{del.buyer_name || "Vecino"}</strong></p>
+                              </div>
+                              <span className="font-brand text-xl text-brillo">+{formatBs(orderAmount)}</span>
+                            </div>
+                            <ProtectedPurchaseBar deliveryStatus={del.delivery_status} orderStatus={order?.status} amountBs={orderAmount} compact />
+                            <div className="rounded-2xl bg-[#0B1410] border-2 border-oro p-4 text-center space-y-1">
+                              <span className="text-xs font-extrabold uppercase text-arena block">🔑 Código de recojo para dictar al repartidor:</span>
+                              <span className="block font-mono text-5xl font-bold tracking-[0.2em] text-brillo">{del.pickup_pin}</span>
+                            </div>
+                          </article>
+                        );
+                      })
+                    )}
+                  </section>
+                </>
+              ) : (
+                <>
+                  {cfgMessage && <div className="p-3.5 rounded-2xl bg-brote/25 border border-brote text-sm font-bold text-arena">✅ {cfgMessage}</div>}
+                  {cfgError && <div className="p-3.5 rounded-2xl bg-red-500/20 border border-red-400/60 text-sm font-bold text-red-100">{cfgError}</div>}
+
+                  <button
+                    onClick={() => {
+                      setEditingProduct(null);
+                      setFormName("");
+                      setFormPrice("");
+                      setFormDescription("");
+                      setFormImageUrl("");
+                      setProductError(null);
+                      setProductStep("edit");
+                      setIsModalOpen(true);
+                    }}
+                    className="w-full py-4 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-xl sm:text-2xl shadow-green-glow border-2 border-white/40"
+                  >
+                    + Publicar Producto
+                  </button>
+
+                  <section className="space-y-3.5">
+                    <h2 className="font-brand text-xl sm:text-2xl text-arena">
+                      Productos en tu Puesto ({myProducts.length})
+                    </h2>
+                    {myProducts.length === 0 ? (
+                      <div className="rounded-2xl bg-[#14221D] border-2 border-arena/20 p-8 text-center space-y-2">
+                        <div className="text-4xl">🧺</div>
+                        <p className="text-base font-bold text-arena">Tu puesto todavía no tiene productos publicados</p>
+                        <p className="text-sm text-arena/85">Saca una foto, pon tu precio en Bs y publica en segundos.</p>
+                      </div>
+                    ) : (
+                      myProducts.map((item) => (
+                        <div key={item.id} className="rounded-2xl bg-[#1A2923] border-2 border-arena/20 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div className="flex items-center gap-3.5">
+                            <img src={item.imageUrl} alt={item.name} className="w-20 h-20 rounded-2xl object-cover border-2 border-oro/60 shrink-0" />
+                            <div>
+                              <span className="font-brand text-2xl text-brillo block">{formatBs(item.priceMotes)}</span>
+                              <h3 className="font-brand text-lg text-arena">{item.name}</h3>
+                              <p className="text-xs text-arena/85">{item.description}</p>
+                            </div>
+                          </div>
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => {
+                                setEditingProduct(item);
+                                setFormName(item.name);
+                                setFormPrice(String(Math.round(item.priceMotes)));
+                                setFormDescription(item.description);
+                                setFormImageUrl(item.imageUrl);
+                                setProductError(null);
+                                setProductStep("edit");
+                                setIsModalOpen(true);
+                              }}
+                              className="px-4 py-2 rounded-xl bg-oro/25 text-brillo border border-oro text-xs font-extrabold"
+                            >
+                              Editar
+                            </button>
+                            <button onClick={() => setProducts((prev) => prev.filter((p) => p.id !== item.id))} className="px-4 py-2 rounded-xl bg-red-500/20 text-red-200 border border-red-400/50 text-xs font-extrabold">
+                              Quitar
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </section>
+                </>
+              )}
+            </main>
+          )}
+
+          {/* 3. MERCADO DEL BARRIO (/marketplace) */}
+          {route === "/marketplace" && (
+            <main className="max-w-md sm:max-w-2xl mx-auto px-4 pt-6 pb-16 space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button onClick={() => setRoute("/")} className="px-4 py-2.5 rounded-xl bg-[#182822] border border-arena/25 text-sm font-bold text-arena">
+                  ← Inicio
+                </button>
+                {isMerchantBuying ? (
+                  <button onClick={() => setRoute("/panel-caserita")} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-oro/20 border-2 border-oro text-xs sm:text-sm font-extrabold text-brillo">
+                    <span>🏪 {activeMerchant.storeName}</span>
+                    <span className="px-2.5 py-0.5 rounded-full bg-bosque text-brote">{formatMotes(activeMerchant.motes)}</span>
+                  </button>
+                ) : activeBuyer?.isLoggedIn ? (
+                  <button onClick={() => setRoute("/perfil-usuario")} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#182822] border-2 border-brote/70 text-xs sm:text-sm font-extrabold text-brillo">
+                    <span>👤 {activeBuyer.name}</span>
+                    <span className="px-2.5 py-0.5 rounded-full bg-brote/25 text-arena">
+                      {buyerHasActiveMotes ? `${formatMotes(activeBuyer.motes)} · ${formatBs(activeBuyer.fiatBs)}` : formatBs(activeBuyer.fiatBs)}
+                    </span>
+                  </button>
+                ) : (
+                  <button onClick={() => setRoute("/perfil-usuario")} className="px-3.5 py-2 rounded-xl bg-[#182822] border border-arena/25 text-sm font-bold text-arena">
+                    👤 Mi Perfil
+                  </button>
+                )}
+              </div>
+
+              {activeMerchant && (
+                <section className="rounded-2xl bg-gradient-to-r from-[#1E3329] via-[#26291A] to-[#1A2D24] border-2 border-oro/55 p-4 space-y-3">
+                  <p className="text-sm text-arena/90">
+                    <span className="text-xs font-extrabold uppercase text-brillo block">🏪 Compra con tus Puntos de Trueque</span>
+                    Puesto activo: <strong className="text-brillo">{activeMerchant.storeName}</strong> ({formatMotes(activeMerchant.motes)} · 1 MOTE = 1 Bs).
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-bosque border border-arena/20">
+                    <button type="button" onClick={() => setBuyerType("merchant")} className={`py-2.5 px-3 rounded-lg text-xs font-extrabold uppercase ${buyerType === "merchant" ? "bg-gradient-to-r from-oro to-brillo text-bosque" : "text-arena/85"}`}>
+                      🏪 Usar mis MOTES
+                    </button>
+                    <button type="button" onClick={() => setBuyerType("buyer")} className={`py-2.5 px-3 rounded-lg text-xs font-extrabold uppercase ${buyerType === "buyer" ? "bg-brote text-bosque" : "text-arena/85"}`}>
+                      👤 Pedir en Bs
+                    </button>
+                  </div>
+                </section>
+              )}
+
+              <header className="space-y-3">
+                <div>
+                  <h1 className="font-brand text-3xl text-arena">Mercado del Barrio</h1>
+                  <p className="text-sm text-arena/90 font-medium">
+                    Pide comida, abarrotes y productos de tus caseritas cercanas · <strong className="text-brote">Comisión: 0 Bs — Cubierta por EcoBanco</strong>
+                  </p>
+                </div>
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="🔍 Buscar comida, producto, caserita o zona..."
+                  className="w-full px-4 py-3.5 rounded-2xl bg-[#0E1815] border-2 border-arena/25 text-base text-arena placeholder:text-arena/65"
+                />
+              </header>
+
+              {purchaseError && (
+                <div className="rounded-2xl bg-red-500/20 border-2 border-red-400/60 p-4 text-sm font-bold text-red-100 flex items-center justify-between">
+                  <span>⚠️ {purchaseError}</span>
+                  <button onClick={() => setPurchaseError(null)} className="font-bold">✕</button>
+                </div>
+              )}
+
+              {lastReceipt && (
+                <div className="rounded-2xl bg-gradient-to-r from-[#173023] via-[#1C2A1E] to-[#173023] border-2 border-brote p-4 sm:p-5 space-y-4 shadow-green-glow">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-sm font-extrabold text-brillo">{formatOrderCode(lastReceipt.contractId)}</span>
+                    <span className="px-3 py-1 rounded-full bg-brote text-bosque text-xs font-extrabold uppercase">🛡️ Compra Protegida</span>
+                  </div>
+                  <p className="text-base text-arena font-semibold">
+                    ¡Pedido confirmado! <strong className="text-brillo">{lastReceipt.productName}</strong> — <strong className="text-brillo text-lg">{formatBs(lastReceipt.amountMotes)}</strong>
+                  </p>
+                  <ProtectedPurchaseBar deliveryStatus={lastDelivery?.delivery_status} orderStatus={lastReceipt.status} amountBs={lastReceipt.amountMotes} />
+                  {lastDelivery && (
+                    <div className="rounded-2xl bg-[#0B1410] border-2 border-oro p-4 text-center space-y-1.5">
+                      <span className="text-xs font-extrabold uppercase text-arena block">Dile este código al repartidor al recibir tu pedido:</span>
+                      <span className="block font-mono text-5xl font-bold tracking-[0.2em] text-brillo">{lastDelivery.delivery_pin}</span>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={() => setRoute(isMerchantBuying ? "/panel-caserita" : "/perfil-usuario")} className="flex-1 py-3 px-4 rounded-xl bg-brote text-bosque font-extrabold text-sm uppercase">
+                      {isMerchantBuying ? "Ver en mi Puesto →" : "Ver mi Pedido y Código →"}
+                    </button>
+                    <button onClick={() => setRoute("/panel-rider")} className="py-3 px-4 rounded-xl bg-oro/20 border border-oro text-brillo font-extrabold text-sm uppercase">
+                      🚲 Repartidores
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {filteredProducts.length === 0 ? (
+                <div className="rounded-2xl bg-[#14221D] border border-arena/20 p-8 text-center space-y-2">
+                  <div className="text-4xl">🌱</div>
+                  <h2 className="font-brand text-xl text-arena">Aún no hay productos publicados</h2>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredProducts.map((product) => (
+                    <article key={product.id} className="rounded-2xl bg-gradient-to-br from-[#1B2B24] to-[#111C18] border-2 border-arena/20 overflow-hidden shadow-lg">
+                      {product.imageUrl && (
+                        <div className="relative">
+                          <img src={product.imageUrl} alt={product.name} className="w-full h-56 object-cover border-b border-arena/15" />
+                          {product.sellerFreeDeliveries > 0 && (
+                            <span className="absolute top-3 left-3 px-3 py-1 rounded-full bg-bosque/95 border-2 border-brote text-xs font-extrabold text-arena">
+                              🚲 Envío ecológico incluido
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <div className="p-4 sm:p-5 space-y-4">
+                        <div className="flex items-start gap-3">
+                          {product.sellerAvatarUrl ? (
+                            <img src={product.sellerAvatarUrl} alt={product.sellerName} className="w-12 h-12 rounded-2xl object-cover border-2 border-oro shrink-0" />
+                          ) : (
+                            <div className="w-12 h-12 rounded-2xl bg-bosque border-2 border-oro/50 flex items-center justify-center text-xl shrink-0">🏪</div>
+                          )}
+                          <div>
+                            <span className="text-sm font-extrabold text-brote block">{product.sellerName}</span>
+                            {(product.sellerAddress || product.sellerSchedule) && (
+                              <span className="text-xs text-arena/85 block">
+                                {product.sellerAddress ? `📍 ${product.sellerAddress}` : ""}
+                                {product.sellerAddress && product.sellerSchedule ? " · " : ""}
+                                {product.sellerSchedule ? `🕒 ${product.sellerSchedule}` : ""}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <h2 className="font-brand text-xl sm:text-2xl text-arena">{product.name}</h2>
+                          <p className="text-sm text-arena/90 mt-1">{product.description}</p>
+                        </div>
+                        <div className="pt-3 border-t border-arena/15 flex items-center justify-between">
+                          <div>
+                            <span className="block text-xs uppercase text-arena/85 font-bold">Precio</span>
+                            <span className="font-brand text-2xl sm:text-3xl text-brillo">{formatBs(product.priceMotes)}</span>
+                          </div>
+                          <button
+                            onClick={() => handleBuyClick(product)}
+                            className="px-6 py-3.5 rounded-2xl font-brand text-lg bg-gradient-to-r from-oro via-brillo to-oro text-bosque shadow-gold-glow border-2 border-[#fff3cc]/70"
+                          >
+                            {isMerchantBuying ? "Pedir con MOTES" : "Pedir"}
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </main>
+          )}
+
+          {/* 4. PERFIL DEL VECINO (/perfil-usuario) */}
+          {route === "/perfil-usuario" && (
+            <main className="max-w-md sm:max-w-2xl mx-auto px-4 pt-6 pb-16 space-y-6">
+              {!activeBuyer?.isLoggedIn ? (
+                <div className="min-h-[75vh] flex flex-col justify-center">
+                  <div className="max-w-md w-full mx-auto rounded-2xl bg-[#182822] border-2 border-oro/50 p-6 sm:p-8 text-center space-y-5 shadow-gold-glow">
+                    <div className="text-4xl">👤</div>
+                    <h1 className="font-brand text-2xl text-arena">Tu libreta de vecino te espera</h1>
+                    <p className="text-sm text-arena/90">Conéctate con Pollar (Google o Email OTP) o elige un producto en el Mercado del Barrio para empezar.</p>
+                    {pollarSession?.authenticated && pollarSession?.stellarAddress ? (
+                      <div className="p-3 rounded-xl bg-bosque border border-brote/60 text-xs font-bold text-brote">
+                        🌟 Pollar Testnet conectado · <span className="font-mono text-brillo">{formatShortStellarAddress(pollarSession.stellarAddress)}</span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setPollarLoginModalRole("buyer")}
+                        className="w-full py-3.5 rounded-2xl bg-[#112019] border-2 border-brote/70 text-brillo font-extrabold text-sm uppercase"
+                      >
+                        🔐 Ingresar con Pollar (Google / Email OTP)
+                      </button>
+                    )}
+                    <button onClick={() => setRoute("/marketplace")} className="w-full py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg shadow-gold-glow">
+                      Ir al Mercado del Barrio →
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <button onClick={() => setRoute("/marketplace")} className="px-4 py-2.5 rounded-xl bg-[#182822] border border-arena/25 text-sm font-bold text-arena">
+                      ← Mercado del Barrio
+                    </button>
+                    {activeBuyer.isProsumer && (
+                      <button onClick={() => setRoute("/panel-caserita")} className="px-3.5 py-2.5 rounded-xl bg-oro/20 border-2 border-oro text-xs font-extrabold text-brillo">
+                        🏪 Mi Puesto →
+                      </button>
+                    )}
+                  </div>
+
+                  <header className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="px-3 py-1 rounded-full bg-brote/20 border border-brote/60 text-arena text-xs font-extrabold uppercase">👤 Mi Libreta Vecinal</span>
+                      {activeBuyer.isProsumer && (
+                        <span className="px-3 py-1 rounded-full bg-oro text-bosque text-xs font-extrabold uppercase">⭐ Club Vecino Activo</span>
+                      )}
+                      {(activeBuyer.stellar_address || pollarSession?.stellarAddress) ? (
+                        <span className="px-3 py-1 rounded-full bg-bosque border border-oro/55 font-mono text-xs font-extrabold text-brillo">
+                          🌟 {formatShortStellarAddress(activeBuyer.stellar_address || pollarSession?.stellarAddress)} · Testnet USDC
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setPollarLoginModalRole("buyer")}
+                          className="px-3 py-1 rounded-full bg-oro/20 border border-oro/60 text-xs font-extrabold text-brillo"
+                        >
+                          🔗 Conectar Pollar (Google / OTP)
+                        </button>
+                      )}
+                    </div>
+                    <h1 className="font-brand text-3xl text-arena">{activeBuyer.name}</h1>
+                    <p className="text-sm text-arena/85">{activeBuyer.email}</p>
+                  </header>
+
+                  {/* Saldo en Bolivianos (oculta tarjeta de 0 MOTES si no es Club Vecino) */}
+                  <section className={`grid grid-cols-1 ${buyerHasActiveMotes ? "sm:grid-cols-2" : ""} gap-4`}>
+                    <div className="rounded-2xl bg-gradient-to-b from-[#1A2A25] to-[#101A17] border-2 border-oro/70 p-5 space-y-3">
+                      <span className="text-xs font-extrabold uppercase text-arena block">Saldo en Bolivianos (Bs)</span>
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="font-brand text-4xl text-brillo">{Math.round(activeBuyer.fiatBs ?? 0)}</span>
+                        <span className="text-lg font-extrabold text-oro">Bs</span>
+                      </div>
+                      <p className="text-xs font-bold text-brote">🛡️ Comisión: 0 Bs — Cubierta por EcoBanco</p>
+                      {qrNotice && (
+                        <div className="p-2.5 rounded-xl bg-brote/25 border border-brote text-xs font-bold text-arena">
+                          ✅ {qrNotice}
+                        </div>
+                      )}
+                      <button type="button" onClick={() => openPollarQrModal("buyer", "fiat_topup", 100)} className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-base shadow-gold-glow">
+                        📲 Cargar saldo con QR de tu Banco
+                      </button>
+                    </div>
+
+                    {buyerHasActiveMotes && (
+                      <div className="rounded-2xl bg-gradient-to-br from-[#1B3326] via-[#172820] to-[#292315] border-2 border-brote/80 p-5 space-y-2">
+                        <span className="text-xs font-extrabold uppercase text-brillo block">Puntos de Trueque (MOTES)</span>
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="font-brand text-4xl text-brillo">{Math.round(activeBuyer.motes ?? 0)}</span>
+                          <span className="text-sm font-extrabold text-brote">MOTES</span>
+                        </div>
+                        <p className="text-xs font-bold text-arena">1 MOTE = 1 Bs en productos del barrio</p>
+                        <p className="text-xs text-brote font-bold">🚲 {activeBuyer.freeDeliveries ?? 0} envíos ecológicos incluidos</p>
+                      </div>
+                    )}
+                  </section>
+
+                  {/* Contacto */}
+                  <section className="rounded-2xl bg-[#14221D] border-2 border-oro/35 p-5 space-y-4">
+                    <h2 className="font-brand text-xl text-arena">📍 Datos de Contacto y Entrega</h2>
+                    {contactMsg && <div className="p-3 rounded-xl bg-brote/25 border border-brote text-sm font-bold text-arena">✅ {contactMsg}</div>}
+                    {contactError && <div className="p-3 rounded-xl bg-red-500/20 border border-red-400/60 text-sm font-bold text-red-100">⚠️ {contactError}</div>}
+                    <form onSubmit={handleBuyerUpdateContact} className="space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold uppercase text-arena mb-1">Número de WhatsApp *</label>
+                          <input type="tel" required value={editPhoneInput} onChange={(e) => setEditPhoneInput(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold uppercase text-arena mb-1">Dirección de Entrega *</label>
+                          <input type="text" required value={editDeliveryAddressInput} onChange={(e) => setEditDeliveryAddressInput(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                        </div>
+                      </div>
+                      <button type="submit" className="px-5 py-3 rounded-xl bg-oro/25 border-2 border-oro text-brillo font-extrabold text-sm uppercase">
+                        Guardar WhatsApp y Dirección
+                      </button>
+                    </form>
+                  </section>
+
+                  {/* Club Vecino */}
+                  <section className="rounded-2xl bg-gradient-to-b from-[#1B2B25] to-[#121D19] border-2 border-oro/55 p-5 space-y-3.5 text-center">
+                    {!activeBuyer.isProsumer ? (
+                      <>
+                        <h2 className="font-brand text-2xl text-arena">Club Vecino · 100 Bs/mes</h2>
+                        <p className="text-sm text-arena/90">
+                          ¿Pides seguido en el barrio? Únete al Club Vecino (100 Bs/mes), recibe <strong className="text-brillo">50 Bs de regalo en MOTES</strong> y <strong className="text-brote">envíos incluidos</strong>.
+                        </p>
+                        <button type="button" onClick={handleBuyerJoinClubVecino} className="w-full py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg shadow-gold-glow border-2 border-[#fff3cc]/70">
+                          Unirme al Club Vecino (100 Bs/mes)
+                        </button>
+                      </>
+                    ) : (
+                      <div className="space-y-2">
+                        <span className="inline-block px-3 py-1 rounded-full bg-brote text-bosque font-extrabold text-xs uppercase">
+                          ✅ Club Vecino Activo · 100 Bs/mes ({activeBuyer.freeDeliveries} envíos incluidos)
+                        </span>
+                      </div>
+                    )}
+                    {upgradeBanner && <div className="p-3 rounded-xl bg-brote/25 border border-brote text-sm font-bold text-arena">✨ {upgradeBanner}</div>}
+                  </section>
+
+                  {/* Historial de Pedidos */}
+                  <section className="rounded-2xl bg-[#14221D] border-2 border-arena/20 p-5 space-y-4">
+                    <h2 className="font-brand text-xl text-arena">Mis Pedidos ({myBuyerOrders.length})</h2>
+                    {myBuyerOrders.length === 0 ? (
+                      <p className="text-sm text-arena/85">Aún no has realizado ningún pedido.</p>
+                    ) : (
+                      myBuyerOrders.map((ord) => {
+                        const del = deliveryByOrderId.get(ord.id);
+                        return (
+                          <article key={ord.id} className="p-4 rounded-2xl bg-bosque border-2 border-arena/20 space-y-3.5">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <span className="font-mono text-xs font-extrabold text-brillo">{formatOrderCode(ord.contract_id)}</span>
+                                <h3 className="font-brand text-lg text-arena">{ord.product_name}</h3>
+                                <p className="text-xs text-arena/85">Caserita: <strong>{ord.seller_name}</strong></p>
+                              </div>
+                              <span className="font-brand text-xl text-brillo">{formatBs(ord.amount_motes)}</span>
+                            </div>
+                            <ProtectedPurchaseBar deliveryStatus={del?.delivery_status} orderStatus={ord.status} amountBs={ord.amount_motes} compact />
+                            {del?.delivery_pin && (
+                              <div className="rounded-2xl bg-[#0B1410] border-2 border-oro p-4 text-center space-y-1">
+                                <span className="text-xs font-extrabold uppercase text-arena block">Dile este código al repartidor al recibir tu pedido:</span>
+                                <span className="block font-mono text-5xl font-bold tracking-[0.2em] text-brillo">{del.delivery_pin}</span>
+                              </div>
+                            )}
+                          </article>
+                        );
+                      })
+                    )}
+                  </section>
+
+                  {/* Invita a un vecino */}
+                  <section className="rounded-2xl bg-gradient-to-r from-[#1E3329] via-[#26291A] to-[#1A2D24] border-2 border-brote/60 p-5 space-y-3">
+                    <h2 className="font-brand text-2xl text-arena">Invita a un vecino</h2>
+                    <div className="flex flex-col sm:flex-row gap-2.5">
+                      <div className="px-4 py-3 rounded-xl bg-bosque border-2 border-oro/50 text-center font-mono font-extrabold text-xl text-brillo">
+                        {activeBuyer.referralCode || "ECO-VECINO"}
+                      </div>
+                      <button type="button" onClick={handleBuyerReferralReward} className="flex-1 py-3.5 px-4 rounded-xl bg-[#25D366] text-bosque font-extrabold text-sm uppercase">
+                        📲 Compartir por WhatsApp
+                      </button>
+                    </div>
+                    {referralBanner && <div className="p-3 rounded-xl bg-brote/25 border border-brote text-sm font-bold text-arena">✨ {referralBanner}</div>}
+                  </section>
+                </>
+              )}
+            </main>
+          )}
+
+          {/* 5. PANEL REPARTIDOR DE BARRIO (/panel-rider) */}
+          {route === "/panel-rider" && (
+            <main className="max-w-md sm:max-w-2xl mx-auto px-4 pt-6 pb-16 space-y-5">
+              {!rider?.isLoggedIn || !rider?.riderVerified ? (
+                <div className="max-w-md w-full mx-auto space-y-5">
+                  <button onClick={() => setRoute("/")} className="px-4 py-2.5 rounded-xl bg-[#182822] border border-arena/25 text-sm font-bold text-arena">
+                    ← Inicio
+                  </button>
+                  <div className="rounded-2xl bg-gradient-to-b from-[#1B2C26] to-[#121D19] border-2 border-brote/70 p-6 shadow-green-glow space-y-5">
+                    <div className="text-center space-y-2">
+                      <span className="inline-block px-3 py-1 rounded-full bg-oro/25 border border-oro/60 text-brillo text-xs font-extrabold uppercase">Repartidor de Barrio</span>
+                      <h1 className="font-brand text-2xl sm:text-3xl text-arena">Credencial de Confianza</h1>
+                    </div>
+                    <div className="rounded-2xl bg-[#101C18] border border-oro/40 p-3.5 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-extrabold uppercase text-brillo">
+                          ✨ Billetera Stellar (Pollar · Testnet)
+                        </span>
+                        <span className="text-[11px] font-bold text-brote">USDC patrocinado</span>
+                      </div>
+                      {pollarSession?.authenticated && pollarSession?.stellarAddress ? (
+                        <div className="flex items-center justify-between gap-2 rounded-xl bg-bosque border border-brote/50 px-3 py-2">
+                          <span className="font-mono text-xs font-extrabold text-brillo">
+                            G… {formatShortStellarAddress(pollarSession.stellarAddress)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setPollarLoginModalRole("rider")}
+                            className="text-xs font-extrabold text-brote underline"
+                          >
+                            Cambiar
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setPollarLoginModalRole("rider")}
+                          className="w-full py-2.5 rounded-xl bg-[#182B24] border border-oro/60 text-brillo font-extrabold text-xs uppercase"
+                        >
+                          🔐 Conectar con Pollar (Google / Email OTP)
+                        </button>
+                      )}
+                    </div>
+                    {riderAuthError && <div className="p-3.5 rounded-xl bg-red-500/20 border border-red-400/60 text-sm font-bold text-red-100 text-center">⚠️ {riderAuthError}</div>}
+                    <form onSubmit={handleRiderOnboarding} className="space-y-4">
+                      <input type="text" required value={riderNameInput} onChange={(e) => setRiderNameInput(e.target.value)} placeholder="1. Nombre Completo *" className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-brote/50 text-arena text-base" />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <input type="tel" required value={riderPhoneInput} onChange={(e) => setRiderPhoneInput(e.target.value)} placeholder="2. WhatsApp *" className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-brote/50 text-arena text-base" />
+                        <input type="text" required value={riderCiInput} onChange={(e) => setRiderCiInput(e.target.value)} placeholder="3. Carnet (CI) *" className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-brote/50 text-arena text-base" />
+                      </div>
+                      <input type="text" required value={riderAddressInput} onChange={(e) => setRiderAddressInput(e.target.value)} placeholder="4. Dirección de Domicilio *" className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-brote/50 text-arena text-base" />
+                      <div className="grid grid-cols-2 gap-3">
+                        <button type="button" onClick={() => setRiderVehicleInput("bicicleta")} className={`p-3.5 rounded-2xl border-2 text-center ${riderVehicleInput === "bicicleta" ? "bg-brote/25 border-brote text-brillo" : "bg-bosque border-arena/25 text-arena/85"}`}>
+                          <span className="text-3xl block">🚲</span>
+                          <span className="text-sm font-extrabold">Bicicleta</span>
+                        </button>
+                        <button type="button" onClick={() => setRiderVehicleInput("moto_electrica")} className={`p-3.5 rounded-2xl border-2 text-center ${riderVehicleInput === "moto_electrica" ? "bg-oro/25 border-oro text-brillo" : "bg-bosque border-arena/25 text-arena/85"}`}>
+                          <span className="text-3xl block">🛵</span>
+                          <span className="text-sm font-extrabold">Moto Eléctrica</span>
+                        </button>
+                      </div>
+
+                      {/* Mensaje de confianza comunitaria */}
+                      <div className="rounded-2xl bg-[#202B1C] border-2 border-oro/65 p-4 space-y-1">
+                        <span className="text-xs font-extrabold uppercase text-brillo block">🤝 Confianza en Comunidad</span>
+                        <p className="text-sm font-semibold text-arena leading-relaxed">
+                          Nuestras caseritas cuidan a su barrio. Tu foto y CI solo sirven para darte tu credencial oficial <strong className="text-brillo">ECO-R-XXXX</strong> y que te elijan como repartidor de confianza.
+                        </p>
+                      </div>
+
+                      <label className="block w-full rounded-2xl border-2 border-dashed border-oro/70 bg-bosque/90 p-4 text-center cursor-pointer">
+                        {riderSelfieUrlInput ? (
+                          <div className="space-y-2">
+                            <img src={riderSelfieUrlInput} alt="Selfie" className="w-24 h-24 rounded-2xl object-cover mx-auto border-2 border-brote" />
+                            <span className="text-sm font-bold text-brote">✅ Selfie cargada · Toca para cambiar</span>
+                          </div>
+                        ) : (
+                          <div className="py-2 space-y-1">
+                            <div className="text-3xl">🤳</div>
+                            <span className="block text-sm font-extrabold text-brillo">6. Subir selfie frontal (rostro descubierto) *</span>
+                          </div>
+                        )}
+                        <input type="file" accept="image/*" onChange={(e) => uploadToBucket(BUCKETS.RIDER_VERIFICATIONS, e.target.files?.[0], setRiderSelfieUrlInput)} className="hidden" />
+                      </label>
+
+                      <label className="block w-full rounded-2xl border-2 border-dashed border-brote/65 bg-bosque/90 p-4 text-center cursor-pointer">
+                        {riderCiPhotoUrlInput ? (
+                          <div className="space-y-2">
+                            <img src={riderCiPhotoUrlInput} alt="CI" className="w-36 h-24 rounded-xl object-cover mx-auto border-2 border-brote" />
+                            <span className="text-sm font-bold text-brote">✅ Foto de CI cargada</span>
+                          </div>
+                        ) : (
+                          <div className="py-2 space-y-1">
+                            <div className="text-3xl">🪪</div>
+                            <span className="block text-sm font-extrabold text-brillo">7. Subir foto de tu Carnet de Identidad (CI) *</span>
+                          </div>
+                        )}
+                        <input type="file" accept="image/*" onChange={(e) => uploadToBucket(BUCKETS.RIDER_VERIFICATIONS, e.target.files?.[0], setRiderCiPhotoUrlInput)} className="hidden" />
+                      </label>
+
+                      <button type="submit" className="w-full py-4 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-lg shadow-green-glow">
+                        Activar mi Credencial Oficial →
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <button onClick={() => setRoute("/")} className="px-4 py-2.5 rounded-xl bg-[#182822] border border-arena/25 text-sm font-bold text-arena">← Inicio</button>
+                    <button onClick={() => setRider((prev) => (prev ? { ...prev, isLoggedIn: false } : null))} className="px-3.5 py-2.5 rounded-xl bg-red-500/20 border border-red-400/50 text-red-200 text-xs font-bold">Salir</button>
+                  </div>
+
+                  <header className="rounded-2xl bg-gradient-to-b from-[#1B2C26] to-[#121D19] border-2 border-brote/60 p-4 sm:p-5 space-y-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        {rider.selfieUrl ? (
+                          <img src={rider.selfieUrl} alt={rider.name} className="w-16 h-16 rounded-2xl object-cover border-2 border-brote shrink-0" />
+                        ) : (
+                          <div className="w-14 h-14 rounded-2xl bg-brote/20 border-2 border-brote flex items-center justify-center text-3xl shrink-0">🚲</div>
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="px-2.5 py-0.5 rounded-full bg-brote text-bosque text-xs font-extrabold uppercase">✅ De Confianza</span>
+                            {(rider.stellar_address || pollarSession?.stellarAddress) ? (
+                              <span className="px-2.5 py-0.5 rounded-full bg-bosque border border-oro/55 font-mono text-xs font-extrabold text-brillo">
+                                🌟 {formatShortStellarAddress(rider.stellar_address || pollarSession?.stellarAddress)} · Testnet
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setPollarLoginModalRole("rider")}
+                                className="px-2.5 py-0.5 rounded-full bg-oro/20 border border-oro/60 text-xs font-extrabold text-brillo"
+                              >
+                                🔗 Conectar Pollar
+                              </button>
+                            )}
+                          </div>
+                          <h1 className="font-brand text-xl sm:text-2xl text-arena truncate mt-1">{rider.name}</h1>
+                          <p className="text-xs text-arena/85">📱 {rider.phone} · 🪪 CI: {rider.ciNumber}</p>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-xs font-bold uppercase text-arena/85 block">Ganado</span>
+                        <span className="font-brand text-2xl text-brillo block">{formatBs(rider.motesEarned)}</span>
+                        <span className="text-xs font-extrabold text-brote">{formatMotes(rider.motesEarned)}</span>
+                      </div>
+                    </div>
+
+                    {rider.riderInviteCode && (
+                      <div className="rounded-xl bg-[#0B1410] border-2 border-oro/60 p-3.5 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <span className="text-xs font-extrabold uppercase text-arena/85 block">🪪 Tu Credencial Oficial</span>
+                          <span className="font-mono text-2xl font-extrabold tracking-widest text-brillo">{rider.riderInviteCode}</span>
+                        </div>
+                        <button type="button" onClick={handleCopyInviteCode} className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-oro to-brillo text-bosque font-extrabold text-xs uppercase">
+                          {copiedCode ? "✅ ¡Copiado!" : "📋 Copiar"}
+                        </button>
+                      </div>
+                    )}
+                  </header>
+
+                  {riderMsg && <div className="p-4 rounded-2xl bg-brote/25 border-2 border-brote text-sm font-bold text-arena">✅ {riderMsg}</div>}
+                  {riderError && <div className="p-4 rounded-2xl bg-red-500/20 border-2 border-red-400/60 text-sm font-bold text-red-100">⚠️ {riderError}</div>}
+
+                  <nav className="grid grid-cols-3 gap-1.5 p-1.5 rounded-2xl bg-[#111C18] border-2 border-arena/20">
+                    <button onClick={() => setRiderTab("disponibles")} className={`py-3 rounded-xl text-xs sm:text-sm font-extrabold ${riderTab === "disponibles" ? "bg-gradient-to-r from-oro to-brillo text-bosque" : "text-arena/85"}`}>📦 Disponibles ({availableDeliveries.length})</button>
+                    <button onClick={() => setRiderTab("en_curso")} className={`py-3 rounded-xl text-xs sm:text-sm font-extrabold ${riderTab === "en_curso" ? "bg-brote text-bosque" : "text-arena/85"}`}>🚲 En Curso ({inProgressDeliveries.length})</button>
+                    <button onClick={() => setRiderTab("ganancias")} className={`py-3 rounded-xl text-xs sm:text-sm font-extrabold ${riderTab === "ganancias" ? "bg-gradient-to-r from-oro to-brillo text-bosque" : "text-arena/85"}`}>💵 Ganancias ({completedDeliveries.length})</button>
+                  </nav>
+
+                  {riderTab === "disponibles" && (
+                    <section className="space-y-4">
+                      {availableDeliveries.length === 0 ? (
+                        <div className="rounded-2xl bg-[#14221D] border-2 border-arena/20 p-8 text-center space-y-2">
+                          <div className="text-4xl">🚲</div>
+                          <h2 className="font-brand text-xl text-arena">No hay pedidos disponibles por ahora</h2>
+                        </div>
+                      ) : (
+                        availableDeliveries.map((del) => (
+                          <article key={del.id} className="rounded-2xl bg-[#16241E] border-2 border-oro/45 p-5 space-y-3.5">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <span className="font-mono text-xs font-extrabold text-brillo">{formatOrderCode(del.contract_id)}</span>
+                                <h2 className="font-brand text-xl text-arena">{del.product_name}</h2>
+                              </div>
+                              <span className="px-3 py-1.5 rounded-xl bg-brote/25 border-2 border-brote font-brand text-base text-brillo">
+                                +{formatBs(del.delivery_fee_motes)}
+                              </span>
+                            </div>
+                            <div className="rounded-xl bg-bosque border border-arena/20 p-3.5 text-sm space-y-1">
+                              <p>🏪 <strong>Recoger en:</strong> {del.seller_name}</p>
+                              <p>📍 <strong>Entregar a:</strong> {del.buyer_name}</p>
+                            </div>
+                            <button onClick={() => handleAcceptDelivery(del.id)} className="w-full py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg shadow-gold-glow">
+                              Tomar este Pedido →
+                            </button>
+                          </article>
+                        ))
+                      )}
+                    </section>
+                  )}
+
+                  {riderTab === "en_curso" && (
+                    <section className="space-y-4">
+                      {inProgressDeliveries.length === 0 ? (
+                        <div className="rounded-2xl bg-[#14221D] border-2 border-arena/20 p-8 text-center">
+                          <h2 className="font-brand text-xl text-arena">No tienes entregas en curso</h2>
+                        </div>
+                      ) : (
+                        inProgressDeliveries.map((del) => {
+                          const st = normalizeDeliveryStatus(del.delivery_status);
+                          return (
+                            <article key={del.id} className="rounded-2xl bg-[#16241E] border-2 border-brote/70 p-5 space-y-4">
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <span className="font-mono text-xs font-extrabold text-brillo">{formatOrderCode(del.contract_id)}</span>
+                                  <h2 className="font-brand text-xl text-arena">{del.product_name}</h2>
+                                </div>
+                                <span className="font-brand text-lg text-brillo">+{formatBs(del.delivery_fee_motes)}</span>
+                              </div>
+
+                              {st === "pending" ? (
+                                <div className="rounded-2xl bg-[#0B1410] border-2 border-oro p-4 space-y-4 text-center">
+                                  <p className="text-base font-bold text-arena">Dile este código a tu caserita al recoger:</p>
+                                  <div className="py-2 px-4 rounded-2xl bg-bosque border-2 border-brillo inline-block">
+                                    <span className="font-mono text-5xl font-bold tracking-[0.22em] text-brillo">{del.pickup_pin}</span>
+                                  </div>
+                                  <div className="flex flex-col sm:flex-row gap-2.5 pt-2 border-t border-arena/15">
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      maxLength="4"
+                                      value={pinInputs[del.id] || ""}
+                                      onChange={(e) => setPinInputs((prev) => ({ ...prev, [del.id]: e.target.value.replace(/\D/g, "") }))}
+                                      placeholder="0000"
+                                      className="sm:w-40 px-4 py-3.5 rounded-xl bg-bosque border-2 border-oro font-mono text-2xl font-bold tracking-[0.25em] text-center text-brillo"
+                                    />
+                                    <button onClick={() => handleValidatePickupPin(del.id)} className="flex-1 py-3.5 rounded-xl bg-gradient-to-r from-oro to-brillo text-bosque font-brand text-lg">
+                                      Confirmar Recojo →
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="rounded-2xl bg-[#0B1410] border-2 border-brote p-4 space-y-4 text-center">
+                                  <p className="text-base font-bold text-arena">Dile este código al vecino al entregar:</p>
+                                  <div className="py-2 px-4 rounded-2xl bg-bosque border-2 border-brote inline-block">
+                                    <span className="font-mono text-5xl font-bold tracking-[0.22em] text-brillo">{del.delivery_pin}</span>
+                                  </div>
+                                  <div className="flex flex-col sm:flex-row gap-2.5 pt-2 border-t border-arena/15">
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      maxLength="4"
+                                      value={pinInputs[del.id] || ""}
+                                      onChange={(e) => setPinInputs((prev) => ({ ...prev, [del.id]: e.target.value.replace(/\D/g, "") }))}
+                                      placeholder="0000"
+                                      className="sm:w-40 px-4 py-3.5 rounded-xl bg-bosque border-2 border-brote font-mono text-2xl font-bold tracking-[0.25em] text-center text-brillo"
+                                    />
+                                    <button onClick={() => handleValidateDeliveryPin(del.id)} className="flex-1 py-3.5 rounded-xl bg-gradient-to-r from-brote to-[#5cd060] text-bosque font-brand text-lg">
+                                      Confirmar Entrega y Cobrar ✓
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </article>
+                          );
+                        })
+                      )}
+                    </section>
+                  )}
+
+                  {riderTab === "ganancias" && (
+                    <section className="space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="rounded-2xl bg-[#1A2A25] border-2 border-oro/70 p-5">
+                          <span className="text-xs font-extrabold uppercase text-arena block">Dinero Disponible (Bs)</span>
+                          <div className="my-2 flex items-baseline gap-1.5">
+                            <span className="font-brand text-4xl text-brillo">{Math.round(rider.motesEarned ?? 0)}</span>
+                            <span className="text-lg font-extrabold text-oro">Bs</span>
+                          </div>
+                          <p className="text-xs font-bold text-brote">🛡️ Comisión: 0 Bs — Cubierta por EcoBanco</p>
+                          <p className="text-xs text-arena/85 mt-1">🚲 {riderSubsidizedCount} entregas cubiertas por EcoBanco</p>
+                        </div>
+                        <div className="rounded-2xl bg-gradient-to-br from-[#1B3326] to-[#292315] border-2 border-brote/80 p-5">
+                          <span className="text-xs font-extrabold uppercase text-brillo block">Puntos de Trueque (MOTES)</span>
+                          <div className="my-2 flex items-baseline gap-1.5">
+                            <span className="font-brand text-4xl text-brillo">{Math.round(rider.motesEarned ?? 0)}</span>
+                            <span className="text-sm font-extrabold text-brote">MOTES</span>
+                          </div>
+                          <p className="text-xs font-bold text-arena">1 MOTE = 1 Bs en productos del barrio</p>
+                          <p className="text-xs text-arena/85 mt-1">{rider.completedDeliveries ?? 0} entregas completadas</p>
+                        </div>
+                      </div>
+                    </section>
+                  )}
+                </>
+              )}
+            </main>
+          )}
+
+          {/* MODAL ALTA RÁPIDA DE PRODUCTO (3 BLOQUES + VISTA PREVIA) */}
+          {isModalOpen && activeMerchant && (
+            <div className="fixed inset-0 z-50 bg-black/85 flex items-end sm:items-center justify-center p-4">
+              <div className="max-w-md w-full rounded-2xl bg-[#172620] border-2 border-brote p-6 space-y-5 max-h-[92vh] overflow-y-auto">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-brand text-2xl text-arena">
+                    {productStep === "preview" ? "¿Se ve bien tu producto?" : editingProduct ? "Editar Producto" : "Publicar Producto"}
+                  </h3>
+                  <button onClick={() => setIsModalOpen(false)} className="text-sm font-extrabold text-arena/85">✕ Cerrar</button>
+                </div>
+
+                {productError && <div className="p-3 rounded-xl bg-red-500/20 border border-red-400/60 text-sm font-bold text-red-100">⚠️ {productError}</div>}
+
+                {productStep === "edit" ? (
+                  <form onSubmit={handleContinueToProductPreview} className="space-y-4">
+                    <div className="rounded-2xl bg-bosque/80 border-2 border-oro/50 p-4 space-y-2">
+                      <span className="block text-sm font-extrabold uppercase text-brillo">1. Foto del producto</span>
+                      <label className="block w-full rounded-2xl border-2 border-dashed border-oro/70 bg-[#0D1714] p-4 text-center cursor-pointer">
+                        {formImageUrl ? (
+                          <div className="space-y-2">
+                            <img src={formImageUrl} alt="Vista previa" className="w-full h-44 object-cover rounded-xl mx-auto" />
+                            <span className="text-sm font-extrabold text-brillo">📷 Cambiar foto</span>
+                          </div>
+                        ) : (
+                          <div className="py-4 space-y-1">
+                            <div className="text-4xl">📸</div>
+                            <span className="block text-base font-extrabold text-brillo">Toca aquí para elegir foto</span>
+                            <span className="block text-xs text-arena/85">Modo Megas activo: se guarda liviana</span>
+                          </div>
+                        )}
+                        <input type="file" accept="image/*" onChange={(e) => uploadToBucket(BUCKETS.PRODUCT_IMAGES, e.target.files?.[0], setFormImageUrl)} className="hidden" />
+                      </label>
+                    </div>
+
+                    <div className="rounded-2xl bg-bosque/80 border-2 border-arena/25 p-4 space-y-2">
+                      <label className="block text-sm font-extrabold uppercase text-brillo">2. Nombre del producto</label>
+                      <input type="text" required placeholder="Ej. Sopita de fideo" value={formName} onChange={(e) => setFormName(e.target.value)} className="w-full px-4 py-3.5 rounded-xl bg-[#0D1714] border-2 border-arena/30 text-arena text-lg font-bold" />
+                      <input type="text" placeholder="Nota corta opcional" value={formDescription} onChange={(e) => setFormDescription(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-[#0D1714] border border-arena/20 text-arena/90 text-sm" />
+                    </div>
+
+                    <div className="rounded-2xl bg-bosque/80 border-2 border-oro/60 p-4 space-y-2">
+                      <label className="block text-sm font-extrabold uppercase text-brillo">3. Precio en Bolivianos (Bs)</label>
+                      <div className="relative flex items-center">
+                        <input ref={priceInputRef} type="number" inputMode="numeric" min="1" step="1" required placeholder="15" value={formPrice} onChange={(e) => setFormPrice(e.target.value.replace(/[^0-9]/g, ""))} className="w-full pl-4 pr-16 py-4 rounded-xl bg-[#0D1714] border-2 border-oro text-brillo font-brand text-3xl" />
+                        <span className="absolute right-4 font-brand text-2xl text-oro">Bs</span>
+                      </div>
+                      <p className="text-xs font-bold text-brote">Comisión: 0 Bs — Cubierta por EcoBanco</p>
+                    </div>
+
+                    <button type="submit" className="w-full py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-xl shadow-gold-glow">
+                      Revisar antes de publicar →
+                    </button>
+                  </form>
+                ) : (
+                  <div className="space-y-5">
+                    <div className="rounded-2xl bg-bosque border-2 border-oro overflow-hidden">
+                      <img src={formImageUrl} alt={formName} className="w-full h-52 object-cover" />
+                      <div className="p-4 space-y-2">
+                        <span className="text-xs font-extrabold text-brote uppercase">🏪 {activeMerchant.storeName}</span>
+                        <h4 className="font-brand text-2xl text-arena">{formName}</h4>
+                        <div className="pt-2 border-t border-arena/15 flex items-baseline justify-between">
+                          <span className="text-xs font-bold uppercase text-arena/85">Precio</span>
+                          <span className="font-brand text-3xl text-brillo">{formatBs(formPrice)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3">
+                      <button type="button" onClick={handleConfirmPublishProduct} className="w-full py-4 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-xl shadow-green-glow">
+                        Publicar así
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProductStep("edit");
+                          setTimeout(() => priceInputRef.current?.focus(), 80);
+                        }}
+                        className="w-full py-3.5 rounded-2xl bg-oro/20 border-2 border-oro text-brillo font-extrabold text-base uppercase"
+                      >
+                        Corregir precio
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* MODAL CHECKOUT CON COMPRA PROTEGIDA Y BANNER CLUB VECINO */}
+          {pendingProduct && (
+            <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+              <div className="max-w-md w-full rounded-2xl bg-gradient-to-b from-[#1D2F28] to-[#121D19] border-2 border-oro p-6 shadow-gold-glow space-y-4 max-h-[92vh] overflow-y-auto">
+                <div className="flex items-center gap-3.5 pb-3 border-b border-arena/15">
+                  {pendingProduct.imageUrl && <img src={pendingProduct.imageUrl} alt={pendingProduct.name} className="w-20 h-20 rounded-2xl object-cover border-2 border-oro shrink-0" />}
+                  <div>
+                    <span className="text-xs font-extrabold text-brote uppercase block">{pendingProduct.sellerName}</span>
+                    <h3 className="font-brand text-xl text-arena">{pendingProduct.name}</h3>
+                    <span className="font-brand text-2xl text-brillo">{formatBs(pendingProduct.priceMotes)}</span>
+                  </div>
+                </div>
+
+                <div className="rounded-xl bg-[#0F1A16] border border-brote/50 p-3.5 space-y-1">
+                  <div className="flex flex-wrap justify-between gap-2 text-xs font-extrabold">
+                    <span className="text-brote uppercase">🛡️ Compra Protegida</span>
+                    <span className="text-brillo">Comisión: 0 Bs — Cubierta por EcoBanco</span>
+                  </div>
+                  <p className="text-xs text-arena/90">Tu dinero se guarda seguro y solo pasa a la caserita cuando recibes tu pedido.</p>
+                </div>
+
+                {lazyError && <div className="p-3 rounded-xl bg-red-500/20 border border-red-400/60 text-sm font-bold text-red-100 text-center">⚠️ {lazyError}</div>}
+
+                <form onSubmit={handleCheckoutSubmit} className="space-y-3.5">
+                  {!isMerchantBuying && (
+                    <div className="rounded-xl bg-[#101C18] border border-oro/40 p-3 flex flex-wrap items-center justify-between gap-2">
+                      {pollarSession?.authenticated && pollarSession?.stellarAddress ? (
+                        <span className="font-mono text-xs font-extrabold text-brillo">
+                          🌟 Pollar Testnet · {formatShortStellarAddress(pollarSession.stellarAddress)}
+                        </span>
+                      ) : (
+                        <>
+                          <span className="text-xs font-bold text-arena/85">Billetera Stellar opcional para recargas:</span>
+                          <button
+                            type="button"
+                            onClick={() => setPollarLoginModalRole("buyer")}
+                            className="px-3 py-1.5 rounded-lg bg-oro/20 border border-oro/60 text-xs font-extrabold text-brillo"
+                          >
+                            🔐 Conectar con Pollar (Google / Email OTP)
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {!isMerchantBuying && (!hasSavedBuyerContact || editingCheckoutContact) && (
+                    <>
+                      <input type="text" required value={buyerNameInput} onChange={(e) => setBuyerNameInput(e.target.value)} placeholder="Tu Nombre Completo *" className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                      <input type="email" required value={buyerEmailInput} onChange={(e) => setBuyerEmailInput(e.target.value)} placeholder="Tu Correo *" className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                      <input type="tel" required value={buyerPhoneInput} onChange={(e) => setBuyerPhoneInput(e.target.value)} placeholder="Número de WhatsApp *" className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                      <input type="text" required value={buyerAddressInput} onChange={(e) => setBuyerAddressInput(e.target.value)} placeholder="Dirección de Entrega *" className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/40 text-arena text-base" />
+                    </>
+                  )}
+
+                  {!isMerchantBuying && !activeBuyer?.isProsumer && (
+                    <div className="rounded-xl bg-[#22291A] border border-oro/55 p-3.5">
+                      <p className="text-xs sm:text-sm font-semibold text-arena leading-snug">
+                        ⭐ ¿Pides seguido en el barrio? Únete al <strong className="text-brillo">Club Vecino (100 Bs/mes)</strong>, recibe <strong className="text-brote">50 Bs de regalo en MOTES</strong> y envíos incluidos.
+                      </p>
+                    </div>
+                  )}
+
+                  <button type="submit" className="w-full py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg shadow-gold-glow border-2 border-[#fff3cc]/70">
+                    Confirmar pedido · {formatBs(pendingProduct.priceMotes)}
+                  </button>
+                  <button type="button" onClick={() => setPendingProduct(null)} className="w-full py-2 text-sm font-bold text-arena/85">
+                    Cancelar
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL CARGAR SALDO CON POLLAR RAMPWIDGET (BO / BOB -> USDC STELLAR TESTNET) */}
+          {qrModalOpen && (
+            <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="max-w-md w-full rounded-2xl bg-bosque border-2 border-oro p-6 space-y-4 shadow-gold-glow">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-brand text-xl text-brillo">Cargar saldo con QR de tu Banco</h3>
+                    <p className="text-[11px] font-bold text-brote">Pollar Ramp · País: BO · BOB → USDC (Stellar Testnet)</p>
+                  </div>
+                  <button type="button" onClick={() => setQrModalOpen(false)} className="text-sm font-extrabold text-arena/85">✕</button>
+                </div>
+                <div className="p-2.5 rounded-xl bg-brote/20 border border-brote/60 text-xs font-bold text-arena text-center">
+                  🛡️ Comisión: 0 Bs — Cubierta por EcoBanco
+                </div>
+
+                {qrError && (
+                  <div className="p-3 rounded-xl bg-red-500/20 border border-red-400/60 text-xs font-bold text-red-100 text-center">
+                    ⚠️ {qrError}
+                  </div>
+                )}
+
+                {!pollarSession?.authenticated || !pollarSession?.stellarAddress ? (
+                  <div className="rounded-2xl bg-[#101C18] border-2 border-oro/50 p-5 text-center space-y-3">
+                    <div className="text-3xl">🔐</div>
+                    <p className="text-sm font-semibold text-arena">
+                      Conecta primero tu billetera Pollar en Stellar Testnet para recibir recargas reales (BOB → USDC).
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setPollarLoginModalRole(qrTargetRole)}
+                      className="w-full py-3.5 rounded-xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-base shadow-gold-glow"
+                    >
+                      Conectar con Pollar (Google / Email OTP)
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="rounded-xl bg-[#0D1714] border border-brote/40 px-3 py-2 flex items-center justify-between text-xs">
+                      <span className="text-arena/80 font-bold">Destino custodial Stellar:</span>
+                      <span className="font-mono font-extrabold text-brillo">
+                        {formatShortStellarAddress(pollarSession.stellarAddress)}
+                      </span>
+                    </div>
+
+                    {qrStep === "amount" ? (
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-xs font-bold uppercase text-arena mb-1">
+                            Monto a cargar en Bolivianos (Bs)
+                            {(qrPurpose === "prosumer_subscription" || qrPurpose === "merchant_premium") ? ` · Mínimo ${SUBSCRIPTION_COST} Bs` : ""}
+                          </label>
+                          <div className="relative flex items-center">
+                            <input
+                              type="number"
+                              min={(qrPurpose === "prosumer_subscription" || qrPurpose === "merchant_premium") ? SUBSCRIPTION_COST : 10}
+                              value={qrAmountBs}
+                              onChange={(e) => setQrAmountBs(e.target.value.replace(/[^0-9]/g, ""))}
+                              className="w-full pl-4 pr-16 py-4 rounded-xl bg-[#0D1714] border-2 border-oro text-brillo font-brand text-3xl"
+                            />
+                            <span className="absolute right-4 font-brand text-2xl text-oro">Bs</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const val = Math.round(Number(qrAmountBs));
+                            const minVal = (qrPurpose === "prosumer_subscription" || qrPurpose === "merchant_premium") ? SUBSCRIPTION_COST : 10;
+                            if (!Number.isFinite(val) || val < minVal) {
+                              setQrError(`Ingresa un monto válido en Bolivianos (mínimo ${minVal} Bs).`);
+                              return;
+                            }
+                            setQrError(null);
+                            setQrStep("qr");
+                          }}
+                          className="w-full py-4 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg shadow-gold-glow"
+                        >
+                          Abrir RampWidget Pollar ({formatBs(qrAmountBs)})
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-4 text-center">
+                        <div className="rounded-2xl bg-[#0D1714] border-2 border-oro p-4 space-y-2">
+                          <span className="inline-block px-2.5 py-0.5 rounded-full bg-brote/25 text-brote text-[11px] font-extrabold uppercase">
+                            Orden Pollar · BO / BOB → USDC
+                          </span>
+                          <div className="font-mono text-xs font-extrabold text-brillo break-all">
+                            ID Orden: {qrOrderId}
+                          </div>
+                          <div className="w-40 h-40 mx-auto rounded-2xl bg-arena p-3 flex flex-col items-center justify-center text-bosque border-4 border-oro">
+                            <span className="text-4xl">📱</span>
+                            <span className="font-brand text-base mt-1">QR {formatBs(qrAmountBs)}</span>
+                            <span className="text-[11px] font-bold">Banco Bolivia · Pollar</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={confirmPollarRampOrderPreview}
+                          className="w-full py-4 rounded-2xl bg-gradient-to-r from-brote via-[#5cd060] to-brote text-bosque font-brand text-lg shadow-green-glow"
+                        >
+                          Confirmar orden Pollar
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* MODAL AUTENTICACIÓN POLLAR (GOOGLE / EMAIL OTP - STELLAR TESTNET) */}
+          {pollarLoginModalRole && (
+            <div className="fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="max-w-md w-full rounded-2xl bg-[#15221D] border-2 border-oro p-6 space-y-4 shadow-gold-glow">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-brand text-xl text-brillo">Conectar Billetera Pollar</h3>
+                    <p className="text-xs font-bold text-brote">Stellar Testnet · USDC patrocinado</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPollarLoginModalRole(null);
+                      setPollarOtpStep("choose");
+                      setPollarOtpCode("");
+                    }}
+                    className="text-sm font-extrabold text-arena/85"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {pollarOtpStep === "choose" ? (
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        completePollarPreviewAuth(
+                          pollarLoginModalRole,
+                          "google",
+                          pollarEmailDraft || "vecino@gmail.com"
+                        )
+                      }
+                      className="w-full py-3.5 px-4 rounded-xl bg-arena text-bosque font-extrabold text-sm flex items-center justify-center gap-2 shadow"
+                    >
+                      <span>🌐</span>
+                      <span>Continuar con Google (Pollar)</span>
+                    </button>
+
+                    <div className="relative py-1 text-center">
+                      <span className="px-2 bg-[#15221D] text-xs font-bold text-arena/70 uppercase">
+                        o ingresa con código a tu correo
+                      </span>
+                    </div>
+
+                    <div className="space-y-2.5">
+                      <input
+                        type="email"
+                        value={pollarEmailDraft}
+                        onChange={(e) => setPollarEmailDraft(e.target.value)}
+                        placeholder="tu.correo@ejemplo.com"
+                        className="w-full px-4 py-3 rounded-xl bg-bosque border-2 border-oro/45 text-arena text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!pollarEmailDraft.trim().includes("@")) return;
+                          setPollarOtpStep("otp");
+                        }}
+                        className="w-full py-3.5 rounded-xl bg-gradient-to-r from-oro to-brillo text-bosque font-brand text-base"
+                      >
+                        Enviar código OTP por Email →
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3.5">
+                    <p className="text-xs text-arena/90">
+                      Ingresa el código de 6 dígitos enviado a <strong className="text-brillo">{pollarEmailDraft}</strong>:
+                    </p>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength="6"
+                      value={pollarOtpCode}
+                      onChange={(e) => setPollarOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      placeholder="123456"
+                      className="w-full px-4 py-3.5 rounded-xl bg-bosque border-2 border-brote font-mono text-2xl font-bold tracking-[0.35em] text-center text-brillo"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPollarOtpStep("choose")}
+                        className="px-4 py-3 rounded-xl bg-[#182822] border border-arena/25 text-xs font-bold text-arena"
+                      >
+                        ← Atrás
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          completePollarPreviewAuth(
+                            pollarLoginModalRole,
+                            "email_otp",
+                            pollarEmailDraft
+                          )
+                        }
+                        className="flex-1 py-3 rounded-xl bg-gradient-to-r from-brote to-[#5cd060] text-bosque font-brand text-base"
+                      >
+                        Verificar y Crear Cuenta G…
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<EcoBancoApp />);
+  </script>
+</body>
+</html>
