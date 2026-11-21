@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { applySessionCookie, readSession } from "@/app/lib/session";
-import { db } from "@/app/lib/store";
+import {
+  applySessionCookie,
+  clearBuyerSession,
+  normalizeBolivianPhone,
+  readSession,
+  withBuyerSession,
+} from "@/app/lib/session";
+import { createEmptyBuyer, db } from "@/app/lib/store";
 import { RiderVehicleType } from "@/app/types/ecobanco";
 
 export async function GET(request: NextRequest) {
   try {
     const session = readSession(request);
-    const state = await db.getState(session);
+    const state = await db.getSessionUsers(session);
     return NextResponse.json({
       buyer: state.buyer,
       merchant: state.merchant,
@@ -43,6 +49,7 @@ export async function POST(request: NextRequest) {
       schedule,
       avatarUrl,
       bankQrUrl,
+      isOpen,
       paymentMethod,
       amountBs,
       buyerType,
@@ -86,15 +93,80 @@ export async function POST(request: NextRequest) {
         ? String(stellarAddress || "")
         : undefined;
 
+    if (action === "logout_all") {
+      const res = NextResponse.json({
+        buyer: createEmptyBuyer(),
+        merchant: null,
+        rider: null,
+        activeBuyerType: "buyer" as const,
+      });
+      return applySessionCookie(res, {});
+    }
+
+    if (action === "merchant_toggle_open") {
+      if (!session.merchantId) {
+        return NextResponse.json(
+          { error: "No hay sesión activa de comerciante." },
+          { status: 401 }
+        );
+      }
+      const result = await db.toggleMerchantOpen(session, Boolean(isOpen));
+      if (!result.ok || !result.merchant) {
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      }
+      const [state, merchantProducts] = await Promise.all([
+        db.getSessionUsers(session),
+        db.getProducts({ includeClosed: true, merchantId: session.merchantId }),
+      ]);
+      return NextResponse.json({
+        message: result.merchant.isOpen
+          ? "Tu puesto ahora está ABIERTO y visible en el Mercado del Barrio."
+          : "Tu puesto ahora está CERRADO y oculto temporalmente en el Mercado del Barrio.",
+        buyer: state.buyer,
+        merchant: result.merchant,
+        products: merchantProducts,
+        activeBuyerType: state.activeBuyerType,
+      });
+    }
+
+    if (action === "buyer_phone_login") {
+      const normalizedPhone = normalizeBolivianPhone(String(phone || ""));
+      if (!normalizedPhone) {
+        return NextResponse.json(
+          {
+            error:
+              "Ingresa tu número de WhatsApp de Bolivia (8 dígitos, ej. 76543210).",
+          },
+          { status: 400 }
+        );
+      }
+      const result = await db.loginBuyerByPhone(normalizedPhone);
+      if (!result.ok || !result.buyer) {
+        return NextResponse.json({ error: result.error }, { status: 404 });
+      }
+      const nextSession = withBuyerSession(session, result.buyer.id);
+      const state = await db.getSessionUsers(nextSession);
+      const res = NextResponse.json({
+        buyer: result.buyer,
+        merchant: state.merchant,
+        activeBuyerType: state.activeBuyerType,
+      });
+      return applySessionCookie(res, nextSession);
+    }
+
     if (action === "merchant_register") {
+      const normalizedPhone =
+        normalizeBolivianPhone(String(phone || "")) ??
+        String(phone || "").replace(/\s+/g, "").trim();
       const result = await db.registerMerchant(
         String(ownerName || ""),
         String(storeName || ""),
-        String(phone || ""),
+        normalizedPhone,
         {
           pollarUserId: resolvedPollarUserId,
           stellarAddress: resolvedStellarAddress,
-        }
+        },
+        password !== undefined ? String(password) : undefined
       );
 
       if (!result.ok || !result.merchant) {
@@ -102,7 +174,7 @@ export async function POST(request: NextRequest) {
       }
 
       const nextSession = { ...session, merchantId: result.merchant.id };
-      const state = await db.getState(nextSession);
+      const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         buyer: state.buyer,
         merchant: result.merchant,
@@ -122,7 +194,7 @@ export async function POST(request: NextRequest) {
       }
 
       const nextSession = { ...session, merchantId: result.merchant.id };
-      const state = await db.getState(nextSession);
+      const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         buyer: state.buyer,
         merchant: result.merchant,
@@ -132,6 +204,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "merchant_update_settings") {
+      if (!session.merchantId) {
+        return NextResponse.json(
+          { error: "No hay sesión activa de comerciante." },
+          { status: 401 }
+        );
+      }
       const result = await db.updateMerchantSettings(session, {
         storeName,
         password,
@@ -140,23 +218,33 @@ export async function POST(request: NextRequest) {
         schedule,
         avatarUrl,
         bankQrUrl,
+        ...(typeof isOpen === "boolean" ? { isOpen } : {}),
       });
 
       if (!result.ok) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       }
 
-      const state = await db.getState(session);
+      const [state, merchantProducts] = await Promise.all([
+        db.getSessionUsers(session),
+        db.getProducts({ includeClosed: true, merchantId: session.merchantId }),
+      ]);
       return NextResponse.json({
         message: "Perfil actualizado correctamente.",
         buyer: state.buyer,
         merchant: result.merchant,
-        products: state.products,
+        products: merchantProducts,
         activeBuyerType: state.activeBuyerType,
       });
     }
 
     if (action === "merchant_upgrade_subscription") {
+      if (!session.merchantId) {
+        return NextResponse.json(
+          { error: "No hay sesión activa de comerciante." },
+          { status: 401 }
+        );
+      }
       const method: "motes" | "fiat" =
         paymentMethod === "motes" ? "motes" : "fiat";
       const result = await db.upgradeMerchantSubscription(session, method);
@@ -165,7 +253,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       }
 
-      const state = await db.getState(session);
+      const state = await db.getSessionUsers(session);
       return NextResponse.json({
         message:
           method === "motes"
@@ -183,7 +271,7 @@ export async function POST(request: NextRequest) {
       if (nextSession.activeBuyerType === "merchant") {
         nextSession.activeBuyerType = "buyer";
       }
-      const state = await db.getState(nextSession);
+      const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         buyer: state.buyer,
         merchant: state.merchant,
@@ -192,13 +280,34 @@ export async function POST(request: NextRequest) {
       return applySessionCookie(res, nextSession);
     }
 
-    if (action === "lazy_login") {
-      const resolvedAddress = String(deliveryAddress || delivery_address || "");
+    if (action === "quick_neighbor_login" || action === "lazy_login") {
+      const cleanName = String(name || "").trim();
+      if (!cleanName) {
+        return NextResponse.json(
+          { error: "Escribe tu nombre o apodo para continuar." },
+          { status: 400 }
+        );
+      }
+
+      const normalizedPhone = normalizeBolivianPhone(String(phone || ""));
+      if (!normalizedPhone) {
+        return NextResponse.json(
+          {
+            error:
+              "Ingresa tu número de WhatsApp de Bolivia (8 dígitos, ej. 76543210).",
+          },
+          { status: 400 }
+        );
+      }
+
+      const resolvedAddress = String(
+        deliveryAddress || delivery_address || ""
+      ).trim();
       const resolvedRef = String(referralCode || referral_code || "");
       const result = await db.registerOrLoginBuyer({
-        name: String(name || ""),
+        name: cleanName,
         email: String(email || ""),
-        phone: String(phone || ""),
+        phone: normalizedPhone,
         deliveryAddress: resolvedAddress,
         referralCode: resolvedRef || undefined,
         pollarUserId: resolvedPollarUserId,
@@ -207,12 +316,8 @@ export async function POST(request: NextRequest) {
       if (!result.ok || !result.buyer) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       }
-      const nextSession = {
-        ...session,
-        buyerId: result.buyer.id,
-        activeBuyerType: "buyer" as const,
-      };
-      const state = await db.getState(nextSession);
+      const nextSession = withBuyerSession(session, result.buyer.id);
+      const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         buyer: result.buyer,
         merchant: state.merchant,
@@ -222,9 +327,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "buyer_logout") {
-      const nextSession = { ...session };
-      delete nextSession.buyerId;
-      const state = await db.getState(nextSession);
+      const nextSession = clearBuyerSession(session);
+      const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         buyer: state.buyer,
         merchant: state.merchant,
@@ -234,17 +338,30 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "buyer_update_profile") {
-      const resolvedAddress = String(deliveryAddress || delivery_address || "");
+      const normalizedPhone = normalizeBolivianPhone(String(phone || ""));
+      if (!normalizedPhone) {
+        return NextResponse.json(
+          {
+            error:
+              "Ingresa tu número de WhatsApp de Bolivia (8 dígitos, ej. 76543210).",
+          },
+          { status: 400 }
+        );
+      }
+
+      const resolvedAddress = String(
+        deliveryAddress || delivery_address || ""
+      ).trim();
       const result = await db.updateBuyerProfile(session, {
         name: name !== undefined ? String(name) : undefined,
         email: email !== undefined ? String(email) : undefined,
-        phone: String(phone || ""),
+        phone: normalizedPhone,
         deliveryAddress: resolvedAddress,
       });
       if (!result.ok) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       }
-      const state = await db.getState(session);
+      const state = await db.getSessionUsers(session);
       return NextResponse.json({
         message: "Datos de contacto y entrega actualizados.",
         buyer: result.buyer,
@@ -303,7 +420,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const state = await db.getState(session);
+      const state = await db.getSessionUsers(session);
       const creditedRounded = Math.round(result.creditedBs ?? Number(amountBs));
       const successMessage =
         resolvedPurpose === "prosumer_subscription"
@@ -351,7 +468,7 @@ export async function POST(request: NextRequest) {
         nextSession.activeBuyerType = "buyer";
       }
 
-      const state = await db.getState(nextSession);
+      const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         matched: true,
         buyer: state.buyer,
@@ -362,16 +479,33 @@ export async function POST(request: NextRequest) {
       return applySessionCookie(res, nextSession);
     }
 
+    if (action === "rider_login") {
+      const result = await db.loginRider(
+        String(identifier || phone || ""),
+        String(password || body.pin || body.secret || "")
+      );
+      if (!result.ok || !result.rider) {
+        return NextResponse.json({ error: result.error }, { status: 401 });
+      }
+      const nextSession = { ...session, riderId: result.rider.id };
+      const res = NextResponse.json({ rider: result.rider });
+      return applySessionCookie(res, nextSession);
+    }
+
     if (action === "rider_onboarding" || action === "rider_verify") {
       const resolvedVehicle: RiderVehicleType =
         vehicleType === "moto_electrica" ? "moto_electrica" : "bicicleta";
       const resolvedCiPhoto = String(ciPhotoUrl || ci_photo_url || "");
+      const normalizedPhone =
+        normalizeBolivianPhone(String(phone || "")) ??
+        String(phone || "").replace(/\s+/g, "").trim();
       const result = await db.registerOrUpdateRider({
         name: String(name || ""),
-        phone: String(phone || ""),
+        phone: normalizedPhone,
         vehicleType: resolvedVehicle,
         address: String(address || ""),
         ciNumber: String(ciNumber || ""),
+        password: String(password || body.pin || ""),
         selfieUrl: String(selfieUrl || ""),
         ciPhotoUrl: resolvedCiPhoto,
         pollarUserId: resolvedPollarUserId,
@@ -381,7 +515,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       }
       const nextSession = { ...session, riderId: result.rider.id };
-      const state = await db.getState(nextSession);
+      const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         rider: result.rider,
         buyer: state.buyer,
@@ -394,7 +528,7 @@ export async function POST(request: NextRequest) {
     if (action === "rider_logout") {
       const nextSession = { ...session };
       delete nextSession.riderId;
-      const state = await db.getState(nextSession);
+      const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         rider: state.rider,
         buyer: state.buyer,
@@ -409,7 +543,7 @@ export async function POST(request: NextRequest) {
       if (!result.ok) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       }
-      const state = await db.getState(session);
+      const state = await db.getSessionUsers(session);
       return NextResponse.json({
         buyer: result.buyer,
         merchant: state.merchant,
@@ -431,7 +565,7 @@ export async function POST(request: NextRequest) {
       const nextType: "buyer" | "merchant" =
         buyerType === "merchant" ? "merchant" : "buyer";
       const nextSession = { ...session, activeBuyerType: nextType };
-      const state = await db.getState(nextSession);
+      const state = await db.getSessionUsers(nextSession);
       const res = NextResponse.json({
         buyer: state.buyer,
         merchant: state.merchant,
@@ -456,7 +590,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       }
 
-      const state = await db.getState(session);
+      const state = await db.getSessionUsers(session);
       return NextResponse.json({
         buyer: state.buyer,
         merchant: state.merchant,

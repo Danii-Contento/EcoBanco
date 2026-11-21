@@ -7,8 +7,12 @@ import {
   ensurePollarWalletAndSync,
   ensurePollarWalletProvisioned,
   extractCompletedRampOrder,
-  formatShortStellarAddress,
 } from "@/app/lib/pollarWallet";
+import {
+  COMMUNITY_COPY,
+  sanitizeUserError,
+  translateBackendMessage,
+} from "@/app/lib/friendlyCopy";
 import { User } from "@/app/types/ecobanco";
 
 export type RampPurpose =
@@ -44,7 +48,7 @@ interface BankQrRechargeModalProps {
 }
 
 const TEXT_REPLACEMENTS: Array<[RegExp, string]> = [
-  [/Comprar\s+cripto|Buy\s+crypto/gi, "Cargar saldo con QR de tu Banco"],
+  [/Comprar\s+cripto|Buy\s+crypto/gi, "Recargar con QR de tu Banco"],
   [/Vender\s+cripto|Sell\s+crypto/gi, "Retirar saldo en Bolivianos"],
   [
     /Elige\s+qué\s+recibes\s+y\s+cuánto\s+pagas/gi,
@@ -52,24 +56,61 @@ const TEXT_REPLACEMENTS: Array<[RegExp, string]> = [
   ],
   [/Ya\s+pagué|I've\s+paid/gi, "Ya hice la transferencia"],
   [/QR\s+de\s+pago|Payment\s+QR/gi, "Escanea o descarga el QR de tu Banco"],
+  [/Powered\s+by\s+Pollar/gi, "Protegido por EcoBanco"],
+  [/Protegido\s+por\s+Pollar/gi, "Protegido por EcoBanco"],
+  [/\bTrustless\s+Work\b/gi, "EcoBanco"],
+  [/\bTrustless\b/gi, "EcoBanco"],
+  [/\bStellar\b/gi, "EcoBanco"],
+  [/\bSoroban\b/gi, "EcoBanco"],
+  [/\bPollar\b/gi, "EcoBanco"],
+  [/\bTestnet\b/gi, ""],
+  [/\bMainnet\b/gi, ""],
+  [/\bWeb3\b/gi, ""],
+  [/\bblockchain\b/gi, ""],
+  [/\bon-?chain\b/gi, ""],
   [/\bBOB\b/g, "Bs"],
   [/\bUSDC\b/gi, "Bs"],
-  [/\bStellar\b/gi, "EcoBanco"],
-  [/\bPollar\b/gi, "EcoBanco"],
+  [/\bXLM\b/gi, "Bs"],
   [/\btrustline\b/gi, "activación"],
+  [/\bcustodial\b/gi, ""],
   [/\bcripto\b|\bcrypto\b/gi, "saldo"],
   [/\bswap\b/gi, "transferencia"],
   [/\bnetwork\b/gi, "conexión"],
-  [/billetera/gi, "libreta digital"],
-  [/\bwallet\b/gi, "libreta digital"],
+  [/\bescrow\b/gi, COMMUNITY_COPY.protectedBadge],
+  [/\bhash\b/gi, "comprobante"],
+  [/billetera(s)?/gi, "libreta$1"],
+  [/\bwallet(s)?\b/gi, "libreta$1"],
+  [/[GSC][A-Z2-7]{25,}/g, ""],
+  [/\b[a-fA-F0-9]{32,}\b/g, ""],
+  [/\s{2,}/g, " "],
 ];
 
-function sanitizeText(value: string): string {
+function sanitizeDomText(value: string): string {
   let out = value;
   for (const [pattern, replacement] of TEXT_REPLACEMENTS) {
     out = out.replace(pattern, replacement);
   }
   return out;
+}
+
+function scrubTextNodesInElement(root: Element) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    const parentEl = node.parentElement;
+    if (
+      parentEl &&
+      !parentEl.closest("script, style, code") &&
+      node.nodeValue &&
+      node.nodeValue.trim().length > 0
+    ) {
+      const nextVal = sanitizeDomText(node.nodeValue);
+      if (nextVal !== node.nodeValue) {
+        node.nodeValue = nextVal;
+      }
+    }
+    node = walker.nextNode();
+  }
 }
 
 function downloadQrElement(container: HTMLElement) {
@@ -101,13 +142,18 @@ function downloadQrElement(container: HTMLElement) {
   }
 }
 
-function enhancePollarRampDom(subtitleText: string) {
+function enhanceRechargeModalDom(subtitleText: string) {
+  const allModalCards = document.querySelectorAll(".pollar-modal-card");
+  allModalCards.forEach((card) => {
+    scrubTextNodesInElement(card);
+  });
+
   const modal = document.querySelector(".pollar-ramp-modal");
   if (!modal) return;
 
   const titleEl = modal.querySelector(".pollar-modal-title");
-  if (titleEl && titleEl.textContent !== "Cargar saldo con QR de tu Banco") {
-    titleEl.textContent = "Cargar saldo con QR de tu Banco";
+  if (titleEl && titleEl.textContent !== "Recargar con QR de tu Banco") {
+    titleEl.textContent = "Recargar con QR de tu Banco";
   }
 
   const subEl = modal.querySelector(".pollar-ramp-subtitle");
@@ -120,27 +166,11 @@ function enhancePollarRampDom(subtitleText: string) {
     const badge = document.createElement("div");
     badge.setAttribute("data-ecobanco-fee-badge", "true");
     badge.className = "ecobanco-ramp-fee-badge";
-    badge.textContent = "🛡️ Comisión: 0 Bs — Cubierta por EcoBanco";
+    badge.textContent = `🛡️ ${COMMUNITY_COPY.zeroCommission}`;
     header.insertAdjacentElement("afterend", badge);
   }
 
-  const walker = document.createTreeWalker(modal, NodeFilter.SHOW_TEXT);
-  let node = walker.nextNode();
-  while (node) {
-    const parentEl = node.parentElement;
-    if (
-      parentEl &&
-      !parentEl.closest("script, style, code") &&
-      node.nodeValue &&
-      node.nodeValue.trim().length > 0
-    ) {
-      const nextVal = sanitizeText(node.nodeValue);
-      if (nextVal !== node.nodeValue) {
-        node.nodeValue = nextVal;
-      }
-    }
-    node = walker.nextNode();
-  }
+  scrubTextNodesInElement(modal);
 
   const qrBlock =
     modal.querySelector(".pollar-ramp-qr")?.parentElement ||
@@ -185,7 +215,6 @@ export function BankQrRechargeModal({
     isAuthenticated: isPollarAuthenticated,
     openLoginModal,
     login,
-    wallet,
   } = usePollar();
   const client = getClient();
 
@@ -221,21 +250,22 @@ export function BankQrRechargeModal({
         setWalletReady(false);
         setWalletError(
           res.reason === "pollar_not_authenticated"
-            ? "Tu sesión de Pollar aún no está activa. Inicia sesión para continuar."
-            : "No se pudo preparar tu cuenta Stellar Testnet (G...). Intenta de nuevo."
+            ? COMMUNITY_COPY.rechargeAuthRequired
+            : COMMUNITY_COPY.walletPreparingError
         );
         return;
       }
 
       if (res.provisioning === "FAILED") {
         setWalletReady(false);
-        setWalletError(
-          "La creación de tu cuenta Stellar falló en la red. Intenta nuevamente."
-        );
+        setWalletError(COMMUNITY_COPY.walletPreparingError);
         return;
       }
 
       setWalletReady(true);
+    } catch (err) {
+      setWalletReady(false);
+      setWalletError(sanitizeUserError(err));
     } finally {
       setIsPreparingWallet(false);
     }
@@ -302,8 +332,10 @@ export function BankQrRechargeModal({
             pollarOrderId: data.pollarOrderId || payload.pollarOrderId,
             creditedBs: Number(data.creditedBs ?? payload.amountBs),
             message:
-              data.message ||
-              `¡Recarga real de ${Math.round(payload.amountBs)} Bs acreditada!`,
+              translateBackendMessage(data.message) ||
+              `¡Recarga de ${Math.round(
+                payload.amountBs
+              )} Bs sumada a tu libreta comunitaria!`,
             buyer: data.buyer,
             merchant: data.merchant,
           });
@@ -315,14 +347,10 @@ export function BankQrRechargeModal({
           return true;
         }
 
-        onErrorRef.current?.(
-          data.error || "No se pudo acreditar la orden de Pollar."
-        );
+        onErrorRef.current?.(sanitizeUserError(data.error));
         return false;
-      } catch {
-        onErrorRef.current?.(
-          "Error de red validando tu orden de Pollar con EcoBanco."
-        );
+      } catch (err) {
+        onErrorRef.current?.(sanitizeUserError(err));
         return false;
       } finally {
         confirmingIdsRef.current.delete(order.id);
@@ -367,7 +395,7 @@ export function BankQrRechargeModal({
     }
   }, [client, confirmCompletedOrder]);
 
-  // Toma snapshot inicial al montar RampWidget y sondea nuevas órdenes completadas
+  // Toma snapshot inicial al montar el generador QR y sondea nuevas recargas completadas
   useEffect(() => {
     if (!open || !isPollarAuthenticated || !walletReady) return;
     let cancelled = false;
@@ -405,20 +433,18 @@ export function BankQrRechargeModal({
     };
   }, [open, isPollarAuthenticated, walletReady, client, checkRampOrdersNow]);
 
-  // Decoración visual Cripto-Cero sobre el modal de RampWidget
+  // Adaptación visual comunitaria sobre los diálogos de ingreso y generación de QR
   useEffect(() => {
-    if (
-      !open ||
-      !isPollarAuthenticated ||
-      !walletReady ||
-      typeof document === "undefined"
-    ) {
+    if (!open || typeof document === "undefined") {
       return;
     }
 
-    document.body.classList.add("ecobanco-qr-ramp-active");
+    const isRampVisible = isPollarAuthenticated && walletReady;
+    if (isRampVisible) {
+      document.body.classList.add("ecobanco-qr-ramp-active");
+    }
 
-    const applyEnhancements = () => enhancePollarRampDom(subtitle);
+    const applyEnhancements = () => enhanceRechargeModalDom(subtitle);
     const rafId = window.requestAnimationFrame(applyEnhancements);
 
     const observer = new MutationObserver(() => {
@@ -453,23 +479,26 @@ export function BankQrRechargeModal({
 
   if (!open) return null;
 
-  // Paso 1: Resolver pollar_not_authenticated antes de montar <RampWidget>
+  // Paso 1: Confirmar acceso rápido del vecino antes de abrir el generador de QR bancario
   if (!isPollarAuthenticated) {
     return (
       <div
         role="dialog"
         aria-modal="true"
-        className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+        className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
       >
-        <div className="max-w-md w-full rounded-2xl bg-[#16241F] border-2 border-oro p-6 space-y-4 shadow-gold-glow text-center">
-          <div className="text-4xl">🔐</div>
-          <h3 className="font-brand text-2xl text-arena">
-            Conecta tu cuenta Pollar para recargar
+        <div className="max-w-md w-full rounded-2xl eco-card-gold p-6 space-y-4 shadow-gold-glow text-center">
+          <div className="text-4xl">📲</div>
+          <h3 className="font-brand text-2xl eco-text">
+            Confirma tu correo para generar tu QR
           </h3>
-          <p className="text-sm text-arena/90 leading-relaxed">
-            Para generar tu QR bancario real en Bolivianos (
-            <strong>BOB → USDC</strong> en Stellar Testnet) necesitamos
-            autenticar tu billetera custodial con Google o código OTP por correo.
+          <p className="text-sm eco-text-muted leading-relaxed">
+            Para generar el código QR bancario por{" "}
+            <strong className="eco-text-gold">
+              {Math.max(1, Math.round(amountBs))} Bs
+            </strong>{" "}
+            y validar tu pago al instante, confirma tu acceso rápido con Google
+            o con tu correo.
           </p>
           <div className="space-y-2.5 pt-1">
             <button
@@ -477,19 +506,19 @@ export function BankQrRechargeModal({
               onClick={openLoginModal}
               className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg shadow-gold-glow"
             >
-              🔑 Iniciar sesión con Google o Email OTP
+              🔑 Continuar con Google o correo
             </button>
             <button
               type="button"
               onClick={() => login({ provider: "google" })}
-              className="w-full py-3 px-4 rounded-xl bg-bosque border-2 border-oro/55 text-brillo font-extrabold text-xs uppercase tracking-wide"
+              className="w-full py-3 px-4 rounded-xl eco-btn-ghost font-extrabold text-xs uppercase tracking-wide"
             >
-              G Continuar directamente con Google
+              G Continuar directo con Google
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="w-full py-2 text-sm font-bold text-arena/80 hover:text-brillo"
+              className="w-full py-2 text-sm font-bold eco-text-muted hover:eco-text"
             >
               Cancelar
             </button>
@@ -499,31 +528,26 @@ export function BankQrRechargeModal({
     );
   }
 
-  // Paso 2: Asegurar cuenta G... READY y trustline USDC antes de abrir RampWidget
+  // Paso 2: Preparación silenciosa de la libreta antes de abrir el QR bancario
   if (!walletReady) {
     return (
       <div
         role="dialog"
         aria-modal="true"
-        className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+        className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
       >
-        <div className="max-w-md w-full rounded-2xl bg-[#16241F] border-2 border-oro p-6 space-y-4 shadow-gold-glow text-center">
+        <div className="max-w-md w-full rounded-2xl eco-card-gold p-6 space-y-4 shadow-gold-glow text-center">
           <div className="text-4xl">{walletError ? "⚠️" : "⏳"}</div>
-          <h3 className="font-brand text-2xl text-arena">
+          <h3 className="font-brand text-2xl eco-text">
             {walletError
-              ? "No pudimos preparar tu billetera"
-              : "Preparando tu billetera Stellar..."}
+              ? "No pudimos generar tu QR"
+              : "Generando tu QR bancario..."}
           </h3>
-          <p className="text-sm text-arena/90 leading-relaxed">
+          <p className="text-sm eco-text-muted leading-relaxed">
             {walletError
               ? walletError
-              : "Estamos activando tu cuenta custodial en Stellar Testnet y el trustline patrocinado de USDC para acreditar tu recarga."}
+              : "Estamos preparando el código QR en Bolivianos (Bs) para que puedas pagar desde tu banco."}
           </p>
-          {wallet?.address && (
-            <p className="font-mono text-xs text-brillo">
-              Cuenta: {formatShortStellarAddress(wallet.address)}
-            </p>
-          )}
           {walletError && (
             <button
               type="button"
@@ -531,13 +555,13 @@ export function BankQrRechargeModal({
               onClick={() => void prepareWalletForRamp()}
               className="w-full py-3.5 rounded-xl bg-gradient-to-r from-oro to-brillo text-bosque font-brand text-base"
             >
-              {isPreparingWallet ? "Reintentando..." : "↻ Reintentar"}
+              {isPreparingWallet ? "Intentando de nuevo..." : "↻ Intentar nuevamente"}
             </button>
           )}
           <button
             type="button"
             onClick={onClose}
-            className="w-full py-2 text-sm font-bold text-arena/80 hover:text-brillo"
+            className="w-full py-2 text-sm font-bold eco-text-muted hover:eco-text"
           >
             Cerrar
           </button>
@@ -555,13 +579,13 @@ export function BankQrRechargeModal({
           country: "BO",
           fiat: "BOB",
           asset: "USDC",
-          amount: String(Math.max(10, Math.round(amountBs))),
+          amount: String(Math.max(1, Math.round(amountBs))),
         }}
         onClose={() => void handleWidgetClose()}
       />
       {isConfirmingOrder && (
-        <div className="fixed bottom-4 right-4 z-[95] px-4 py-2.5 rounded-xl bg-[#14201C] border-2 border-brote text-xs font-extrabold text-arena shadow-green-glow">
-          ✅ Validando orden Pollar y acreditando en Supabase...
+        <div className="fixed bottom-4 right-4 z-[95] px-4 py-2.5 rounded-xl eco-alert-success text-xs font-extrabold shadow-green-glow">
+          ✅ Validando tu pago QR en Bolivianos (Bs)...
         </div>
       )}
     </>

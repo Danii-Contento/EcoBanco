@@ -8,6 +8,7 @@ import {
   User,
 } from "../types/ecobanco";
 import { EcoBancoSession } from "./session";
+import { areSameBolivianPhone, normalizeBolivianPhone } from "./phone";
 import {
   SUPABASE_BUCKETS,
   SupabaseProductRow,
@@ -33,13 +34,94 @@ const STELLAR_CLASSIC_ACCOUNT_REGEX = /^G[A-Z2-7]{55}$/;
 const STELLAR_TX_HASH_REGEX = /^[a-fA-F0-9]{64}$/;
 const POLLAR_ORDER_ID_REGEX = /^[A-Za-z0-9_:-]{8,128}$/;
 const STELLAR_HORIZON_TESTNET_URL = "https://horizon-testnet.stellar.org";
+const CLOSED_STORE_MARKER = "[[ECO_CLOSED]]";
 
 const globalRampStore = globalThis as unknown as {
   ecoBancoProcessedRampKeys?: Set<string>;
+  ecoBancoMerchantOpenOverrides?: Map<string, boolean>;
 };
 const processedRampKeys: Set<string> =
   globalRampStore.ecoBancoProcessedRampKeys ??
   (globalRampStore.ecoBancoProcessedRampKeys = new Set<string>());
+const merchantOpenOverrides: Map<string, boolean> =
+  globalRampStore.ecoBancoMerchantOpenOverrides ??
+  (globalRampStore.ecoBancoMerchantOpenOverrides = new Map<string, boolean>());
+
+function stripClosedMarker(text?: string | null): string {
+  return (text || "").replace(/\s*\[\[ECO_CLOSED\]\]\s*/g, "").trim();
+}
+
+function extractStoreOpenAndDescription(row: SupabaseUserRow): {
+  isOpen: boolean;
+  cleanDescription: string;
+} {
+  const rawDesc = row.store_description ?? "";
+  const cleanDescription = stripClosedMarker(rawDesc);
+  if (typeof row.is_open === "boolean") {
+    return { isOpen: row.is_open, cleanDescription };
+  }
+  if (merchantOpenOverrides.has(row.id)) {
+    return {
+      isOpen: Boolean(merchantOpenOverrides.get(row.id)),
+      cleanDescription,
+    };
+  }
+  if (rawDesc.includes(CLOSED_STORE_MARKER)) {
+    return { isOpen: false, cleanDescription };
+  }
+  return { isOpen: true, cleanDescription };
+}
+
+function encodeOrderProductName(
+  baseName: string,
+  quantity: number,
+  specialNotes?: string
+): string {
+  const cleanBase = baseName.trim();
+  const qtyPrefix = quantity > 1 ? `${quantity}x ` : "";
+  const cleanNotes = (specialNotes || "").trim();
+  const noteSuffix = cleanNotes ? ` · Nota: ${cleanNotes}` : "";
+  return `${qtyPrefix}${cleanBase}${noteSuffix}`;
+}
+
+function parseOrderProductMeta(
+  rawName?: string | null,
+  explicitQty?: number | null,
+  explicitNotes?: string | null
+): {
+  displayName: string;
+  quantity: number;
+  specialNotes: string;
+} {
+  let text = (rawName || "").trim();
+  let parsedNotes = (explicitNotes || "").trim();
+  let parsedQty =
+    typeof explicitQty === "number" && Number.isFinite(explicitQty) && explicitQty >= 1
+      ? Math.round(explicitQty)
+      : 0;
+
+  const noteIdx = text.indexOf(" · Nota: ");
+  if (noteIdx >= 0) {
+    if (!parsedNotes) {
+      parsedNotes = text.slice(noteIdx + " · Nota: ".length).trim();
+    }
+    text = text.slice(0, noteIdx).trim();
+  }
+
+  const qtyMatch = text.match(/^(\d{1,2})x\s+(.+)$/i);
+  if (qtyMatch) {
+    if (!parsedQty) {
+      parsedQty = Math.max(1, Number(qtyMatch[1]) || 1);
+    }
+    text = qtyMatch[2].trim();
+  }
+
+  return {
+    displayName: text || rawName || "Pedido EcoBanco",
+    quantity: parsedQty >= 1 ? parsedQty : 1,
+    specialNotes: parsedNotes,
+  };
+}
 
 async function verifyStellarTestnetTx(
   txHash: string
@@ -158,6 +240,11 @@ function mapOrderToTransaction(
   delivery?: Delivery,
   buyerName?: string
 ): EscrowTransaction {
+  const meta = parseOrderProductMeta(
+    order.product_name,
+    order.quantity ?? delivery?.quantity,
+    order.special_notes ?? delivery?.special_notes
+  );
   return {
     contractId: order.contract_id,
     engagementId: order.engagement_id ?? delivery?.engagement_id ?? null,
@@ -165,7 +252,9 @@ function mapOrderToTransaction(
     releaseTxHash: order.release_tx_hash ?? delivery?.release_tx_hash ?? null,
     orderId: order.id,
     productId: order.product_id || "",
-    productName: order.product_name,
+    productName: meta.displayName,
+    quantity: meta.quantity,
+    specialNotes: meta.specialNotes || undefined,
     sellerId: order.seller_id,
     sellerName: order.seller_name,
     buyerId: order.buyer_id,
@@ -218,13 +307,14 @@ function mapUserRow(
       ? Number(row.motes_balance ?? 0)
       : 0;
   const deliveryAddress = row.delivery_address || row.address || "";
+  const storeState = extractStoreOpenAndDescription(row);
 
   return {
     id: row.id,
     role: isRider ? "rider" : row.role,
     name: row.name,
     storeName: row.store_name ?? undefined,
-    storeDescription: row.store_description ?? "",
+    storeDescription: storeState.cleanDescription,
     address: row.address ?? "",
     deliveryAddress,
     schedule: row.schedule ?? "",
@@ -235,6 +325,7 @@ function mapUserRow(
     bankQrUrl: row.bank_qr_url ?? "",
     email: row.email ?? undefined,
     isLoggedIn: isSessionActive,
+    isOpen: isMerchant ? storeState.isOpen : true,
     isProsumer: isPremiumOrProsumer,
     isPremium: isPremiumOrProsumer,
     fiatWalletEnabled,
@@ -310,6 +401,10 @@ function mapProductRow(
           u.store_name.toLowerCase() === row.seller_name.toLowerCase()))
   );
 
+  const sellerState = seller
+    ? extractStoreOpenAndDescription(seller)
+    : { isOpen: Boolean(row.active), cleanDescription: "" };
+
   return {
     id: row.id,
     name: row.name,
@@ -319,8 +414,9 @@ function mapProductRow(
     sellerAvatarUrl: seller?.avatar_url || row.seller_avatar_url || "",
     sellerAddress: seller?.address || row.seller_address || "",
     sellerSchedule: seller?.schedule || row.seller_schedule || "",
-    sellerDescription: seller?.store_description || "",
+    sellerDescription: sellerState.cleanDescription,
     sellerFreeDeliveries: Number(seller?.free_deliveries_remaining ?? 0),
+    sellerIsOpen: sellerState.isOpen,
     category: (row.category as Product["category"]) || undefined,
     priceMotes: Number(row.price_motes),
     imageUrl: row.image_url,
@@ -342,6 +438,11 @@ function enrichDeliveriesWithContext(
     const order = orderById.get(del.order_id);
     const seller = del.seller_id ? userById.get(del.seller_id) : undefined;
     const buyer = del.buyer_id ? userById.get(del.buyer_id) : undefined;
+    const productMeta = parseOrderProductMeta(
+      del.product_name || order?.product_name || "Pedido EcoBanco",
+      del.quantity ?? order?.quantity,
+      del.special_notes ?? order?.special_notes
+    );
 
     return {
       ...del,
@@ -350,8 +451,9 @@ function enrichDeliveriesWithContext(
       engagement_id: del.engagement_id ?? order?.engagement_id ?? null,
       fund_tx_hash: del.fund_tx_hash ?? order?.fund_tx_hash ?? null,
       release_tx_hash: del.release_tx_hash ?? order?.release_tx_hash ?? null,
-      product_name:
-        del.product_name || order?.product_name || "Pedido EcoBanco",
+      product_name: productMeta.displayName,
+      quantity: productMeta.quantity,
+      special_notes: productMeta.specialNotes || null,
       amount_motes: Number(del.amount_motes ?? order?.amount_motes ?? 0),
       seller_name:
         del.seller_name || seller?.store_name || order?.seller_name || "",
@@ -411,6 +513,79 @@ export function createEmptyBuyer(): User {
 }
 
 export class SupabaseEcoBancoRepository {
+  public async getSessionUsers(session: EcoBancoSession): Promise<{
+    buyer: User;
+    merchant: User | null;
+    rider: Rider | null;
+    activeBuyerType: "buyer" | "merchant";
+  }> {
+    if (!session.buyerId && !session.merchantId && !session.riderId) {
+      return {
+        buyer: createEmptyBuyer(),
+        merchant: null,
+        rider: null,
+        activeBuyerType: "buyer",
+      };
+    }
+
+    if (session.riderId && !session.buyerId && !session.merchantId) {
+      const riderRow = await supabaseTables.getUserById(session.riderId);
+      const validRider =
+        riderRow && isRiderUserRow(riderRow)
+          ? mapRiderRow(riderRow, true)
+          : null;
+      return {
+        buyer: createEmptyBuyer(),
+        merchant: null,
+        rider: validRider,
+        activeBuyerType: "buyer",
+      };
+    }
+
+    const [users, orders, rawDeliveries] = await Promise.all([
+      supabaseTables.listUsers(),
+      supabaseTables.listOrders(),
+      supabaseTables.listDeliveries(),
+    ]);
+
+    const deliveries = enrichDeliveriesWithContext(rawDeliveries, orders, users);
+
+    const merchantRow = session.merchantId
+      ? users.find(
+          (u) => u.role === "merchant" && u.id === session.merchantId
+        ) || null
+      : null;
+
+    const buyerRow = session.buyerId
+      ? users.find(
+          (u) =>
+            u.role === "buyer" &&
+            !isRiderUserRow(u) &&
+            u.id === session.buyerId
+        ) || null
+      : null;
+
+    const riderRow = session.riderId
+      ? users.find((u) => isRiderUserRow(u) && u.id === session.riderId) || null
+      : null;
+
+    const activeBuyerType: "buyer" | "merchant" =
+      session.activeBuyerType === "merchant" && merchantRow
+        ? "merchant"
+        : "buyer";
+
+    return {
+      buyer: buyerRow
+        ? mapUserRow(buyerRow, orders, deliveries, users, true)
+        : createEmptyBuyer(),
+      merchant: merchantRow
+        ? mapUserRow(merchantRow, orders, deliveries, users, true)
+        : null,
+      rider: riderRow ? mapRiderRow(riderRow, true) : null,
+      activeBuyerType,
+    };
+  }
+
   public async getState(session: EcoBancoSession): Promise<{
     buyer: User;
     merchant: User | null;
@@ -468,23 +643,47 @@ export class SupabaseEcoBancoRepository {
     };
   }
 
-  public async getProducts(): Promise<Product[]> {
+  public async getProducts(options?: {
+    includeClosed?: boolean;
+    merchantId?: string;
+  }): Promise<Product[]> {
     const [rows, users] = await Promise.all([
       supabaseTables.listProducts(),
       supabaseTables.listUsers(),
     ]);
-    return rows.map((row) => mapProductRow(row, users));
+    let mapped = rows.map((row) => mapProductRow(row, users));
+
+    if (options?.merchantId) {
+      const merchant = users.find(
+        (u) => u.role === "merchant" && u.id === options.merchantId
+      );
+      const merchantStoreLower = (merchant?.store_name || "").toLowerCase();
+      mapped = mapped.filter(
+        (p) =>
+          p.sellerId === options.merchantId ||
+          (merchantStoreLower &&
+            p.sellerName.toLowerCase() === merchantStoreLower)
+      );
+    }
+
+    if (options?.includeClosed) {
+      return mapped;
+    }
+    return mapped.filter((p) => p.active && p.sellerIsOpen !== false);
   }
 
   public async registerMerchant(
     ownerName: string,
     storeName: string,
     phone: string,
-    pollar?: { pollarUserId?: string; stellarAddress?: string }
+    pollar?: { pollarUserId?: string; stellarAddress?: string },
+    password?: string
   ): Promise<{ ok: boolean; error?: string; merchant?: User }> {
     const cleanOwner = ownerName.trim();
     const cleanStore = storeName.trim();
-    const cleanPhone = phone.replace(/\s+/g, "").trim();
+    const cleanPhone =
+      normalizeBolivianPhone(phone) ?? phone.replace(/\s+/g, "").trim();
+    const cleanPass = (password || "").trim() || cleanPhone;
     const cleanPollarUserId = pollar?.pollarUserId?.trim() || null;
     const cleanStellarAddress =
       pollar?.stellarAddress &&
@@ -502,7 +701,7 @@ export class SupabaseEcoBancoRepository {
     const users = await supabaseTables.listUsers();
     const exists = users.find(
       (u) =>
-        u.phone === cleanPhone ||
+        areSameBolivianPhone(u.phone, cleanPhone) ||
         (u.role === "merchant" &&
           u.store_name?.toLowerCase() === cleanStore.toLowerCase())
     );
@@ -526,7 +725,7 @@ export class SupabaseEcoBancoRepository {
       avatar_url: "",
       profile_completed: false,
       phone: cleanPhone,
-      password: cleanPhone,
+      password: cleanPass,
       bank_qr_url: "",
       email: null,
       is_prosumer: false,
@@ -591,7 +790,7 @@ export class SupabaseEcoBancoRepository {
         u.role === "merchant" &&
         (normalize(u.store_name || "") === cleanId ||
           normalize(u.name) === cleanId ||
-          (u.phone && u.phone === cleanPhoneId))
+          areSameBolivianPhone(u.phone, cleanPhoneId))
     );
 
     if (!found) {
@@ -630,6 +829,7 @@ export class SupabaseEcoBancoRepository {
       schedule?: string;
       avatarUrl?: string;
       bankQrUrl?: string;
+      isOpen?: boolean;
     }
   ): Promise<{ ok: boolean; error?: string; merchant?: User }> {
     if (!session.merchantId) {
@@ -676,6 +876,11 @@ export class SupabaseEcoBancoRepository {
       }
     }
 
+    const currentStoreState = extractStoreOpenAndDescription(current);
+    const nextIsOpen =
+      typeof input.isOpen === "boolean" ? input.isOpen : currentStoreState.isOpen;
+    merchantOpenOverrides.set(current.id, nextIsOpen);
+
     const nextStoreName =
       input.storeName && input.storeName.trim()
         ? input.storeName.trim()
@@ -686,10 +891,16 @@ export class SupabaseEcoBancoRepository {
         ? input.password.trim()
         : current.password;
 
-    const nextDescription =
+    const cleanDescription =
       input.storeDescription !== undefined
-        ? input.storeDescription.trim()
-        : current.store_description;
+        ? stripClosedMarker(input.storeDescription)
+        : currentStoreState.cleanDescription;
+
+    const persistedDescription = nextIsOpen
+      ? cleanDescription
+      : cleanDescription
+      ? `${cleanDescription} ${CLOSED_STORE_MARKER}`
+      : CLOSED_STORE_MARKER;
 
     const nextAddress =
       input.address !== undefined ? input.address.trim() : current.address;
@@ -698,18 +909,19 @@ export class SupabaseEcoBancoRepository {
       input.schedule !== undefined ? input.schedule.trim() : current.schedule;
 
     const profileCompleted = Boolean(
-      nextDescription && nextAddress && nextSchedule && resolvedAvatarUrl
+      cleanDescription && nextAddress && nextSchedule && resolvedAvatarUrl
     );
 
     const updated = await supabaseTables.updateUser(current.id, {
       store_name: nextStoreName,
       password: nextPassword,
-      store_description: nextDescription,
+      store_description: persistedDescription,
       address: nextAddress,
       schedule: nextSchedule,
       avatar_url: resolvedAvatarUrl,
       bank_qr_url: resolvedBankQrUrl,
       profile_completed: profileCompleted,
+      is_open: nextIsOpen,
     });
 
     await supabaseTables.updateProductsBySeller(current.id, {
@@ -717,6 +929,7 @@ export class SupabaseEcoBancoRepository {
       seller_avatar_url: resolvedAvatarUrl,
       seller_address: nextAddress,
       seller_schedule: nextSchedule,
+      active: nextIsOpen,
     });
 
     const [orders, deliveries] = await Promise.all([
@@ -725,8 +938,23 @@ export class SupabaseEcoBancoRepository {
     ]);
     return {
       ok: true,
-      merchant: mapUserRow(updated || current, orders, deliveries, users, true),
+      merchant: mapUserRow(
+        updated
+          ? { ...updated, is_open: nextIsOpen, store_description: persistedDescription }
+          : { ...current, is_open: nextIsOpen, store_description: persistedDescription },
+        orders,
+        deliveries,
+        users,
+        true
+      ),
     };
+  }
+
+  public async toggleMerchantOpen(
+    session: EcoBancoSession,
+    isOpen: boolean
+  ): Promise<{ ok: boolean; error?: string; merchant?: User }> {
+    return this.updateMerchantSettings(session, { isOpen });
   }
 
   public async upgradeMerchantSubscription(
@@ -820,7 +1048,7 @@ export class SupabaseEcoBancoRepository {
   // ============================================================================
   public async registerOrLoginBuyer(input: {
     name: string;
-    email: string;
+    email?: string;
     phone: string;
     deliveryAddress: string;
     referralCode?: string;
@@ -829,7 +1057,9 @@ export class SupabaseEcoBancoRepository {
   }): Promise<{ ok: boolean; error?: string; buyer?: User }> {
     const cleanName = (input.name || "").trim();
     const cleanEmail = (input.email || "").trim().toLowerCase();
-    const cleanPhone = (input.phone || "").replace(/\s+/g, "").trim();
+    const cleanPhone =
+      normalizeBolivianPhone(input.phone) ??
+      (input.phone || "").replace(/\s+/g, "").trim();
     const cleanAddress = (input.deliveryAddress || "").trim();
     const cleanReferralCode = (input.referralCode || "").trim().toUpperCase();
     const cleanPollarUserId = input.pollarUserId?.trim() || null;
@@ -839,11 +1069,11 @@ export class SupabaseEcoBancoRepository {
         ? input.stellarAddress.trim()
         : null;
 
-    if (!cleanName || !cleanEmail || !cleanPhone || !cleanAddress) {
+    if (!cleanName || !cleanPhone) {
       return {
         ok: false,
         error:
-          "Nombre, correo, número de WhatsApp y dirección de entrega son obligatorios.",
+          "Escribe tu nombre o apodo y tu número de WhatsApp para continuar.",
       };
     }
 
@@ -857,17 +1087,19 @@ export class SupabaseEcoBancoRepository {
       (u) =>
         u.role === "buyer" &&
         !isRiderUserRow(u) &&
-        (u.email?.toLowerCase() === cleanEmail || u.phone === cleanPhone)
+        (areSameBolivianPhone(u.phone, cleanPhone) ||
+          (cleanEmail && u.email?.toLowerCase() === cleanEmail))
     );
 
     const phoneConflict = users.find(
-      (u) => u.phone === cleanPhone && u.id !== existingBuyer?.id
+      (u) =>
+        areSameBolivianPhone(u.phone, cleanPhone) && u.id !== existingBuyer?.id
     );
     if (phoneConflict) {
       return {
         ok: false,
         error:
-          "Ese número de WhatsApp ya está registrado en otra cuenta de EcoBanco.",
+          "Ese número de WhatsApp ya está registrado en una cuenta de caserita o repartidor. Usa otro número para pedir como vecino.",
       };
     }
 
@@ -879,10 +1111,11 @@ export class SupabaseEcoBancoRepository {
       );
       const updated = await supabaseTables.updateUser(existingBuyer.id, {
         name: cleanName,
-        email: cleanEmail,
+        ...(cleanEmail ? { email: cleanEmail } : {}),
         phone: cleanPhone,
-        address: cleanAddress,
-        delivery_address: cleanAddress,
+        ...(cleanAddress
+          ? { address: cleanAddress, delivery_address: cleanAddress }
+          : {}),
         fiat_wallet_enabled: true,
         motes_enabled: isProsumer,
         motes_balance: isProsumer
@@ -913,11 +1146,11 @@ export class SupabaseEcoBancoRepository {
       delivery_address: cleanAddress,
       schedule: "",
       avatar_url: "",
-      profile_completed: true,
+      profile_completed: Boolean(cleanAddress),
       phone: cleanPhone,
       password: null,
       bank_qr_url: "",
-      email: cleanEmail,
+      email: cleanEmail || null,
       is_prosumer: false,
       is_premium: false,
       fiat_wallet_enabled: true,
@@ -985,6 +1218,42 @@ export class SupabaseEcoBancoRepository {
     };
   }
 
+  public async loginBuyerByPhone(
+    phone: string
+  ): Promise<{ ok: boolean; error?: string; buyer?: User }> {
+    const cleanPhone =
+      normalizeBolivianPhone(phone) ?? (phone || "").replace(/\s+/g, "").trim();
+    if (!cleanPhone) {
+      return { ok: false, error: "Escribe tu número de WhatsApp." };
+    }
+
+    const [users, orders, deliveries] = await Promise.all([
+      supabaseTables.listUsers(),
+      supabaseTables.listOrders(),
+      supabaseTables.listDeliveries(),
+    ]);
+
+    const found = users.find(
+      (u) =>
+        u.role === "buyer" &&
+        !isRiderUserRow(u) &&
+        areSameBolivianPhone(u.phone, cleanPhone)
+    );
+
+    if (!found) {
+      return {
+        ok: false,
+        error:
+          "No encontramos pedidos guardados con ese WhatsApp todavía. Puedes pedir directo en el Mercado del Barrio sin registrarte.",
+      };
+    }
+
+    return {
+      ok: true,
+      buyer: mapUserRow(found, orders, deliveries, users, true),
+    };
+  }
+
   public async updateBuyerProfile(
     session: EcoBancoSession,
     input: {
@@ -998,7 +1267,9 @@ export class SupabaseEcoBancoRepository {
       return { ok: false, error: "No hay sesión activa de comprador." };
     }
 
-    const cleanPhone = (input.phone || "").replace(/\s+/g, "").trim();
+    const cleanPhone =
+      normalizeBolivianPhone(input.phone) ??
+      (input.phone || "").replace(/\s+/g, "").trim();
     const cleanAddress = (input.deliveryAddress || "").trim();
 
     if (!cleanPhone || !cleanAddress) {
@@ -1025,7 +1296,7 @@ export class SupabaseEcoBancoRepository {
     }
 
     const phoneConflict = users.find(
-      (u) => u.phone === cleanPhone && u.id !== activeBuyer.id
+      (u) => areSameBolivianPhone(u.phone, cleanPhone) && u.id !== activeBuyer.id
     );
     if (phoneConflict) {
       return {
@@ -1494,6 +1765,8 @@ export class SupabaseEcoBancoRepository {
         ).publicUrl
       : input.imageUrl;
 
+    const merchantOpen = extractStoreOpenAndDescription(activeMer).isOpen;
+
     const newRow: SupabaseProductRow = {
       id: `prod-${Date.now()}`,
       seller_id: activeMer.id,
@@ -1507,7 +1780,7 @@ export class SupabaseEcoBancoRepository {
       price_motes: Number(input.priceMotes),
       image_url: resolvedImage,
       description: input.description.trim(),
-      active: true,
+      active: merchantOpen,
       created_at: new Date().toISOString(),
     };
 
@@ -1604,7 +1877,11 @@ export class SupabaseEcoBancoRepository {
     productId: string,
     buyerType: "buyer" | "merchant",
     paymentMethod?: "fiat" | "motes",
-    preSignedDeployXdr?: string | null
+    preSignedDeployXdr?: string | null,
+    orderOptions?: {
+      quantity?: number;
+      specialNotes?: string;
+    }
   ): Promise<{
     ok: boolean;
     error?: string;
@@ -1622,6 +1899,24 @@ export class SupabaseEcoBancoRepository {
       return {
         ok: false,
         error: "El producto seleccionado no existe.",
+      };
+    }
+
+    const sellerAccount = users.find(
+      (u) =>
+        u.role === "merchant" &&
+        (u.id === product.seller_id ||
+          u.store_name?.toLowerCase() === product.seller_name.toLowerCase())
+    );
+
+    if (
+      !product.active ||
+      (sellerAccount && !extractStoreOpenAndDescription(sellerAccount).isOpen)
+    ) {
+      return {
+        ok: false,
+        error:
+          "Este puesto se encuentra cerrado en este momento. Intenta cuando la caserita vuelva a abrir.",
       };
     }
 
@@ -1644,7 +1939,7 @@ export class SupabaseEcoBancoRepository {
     if (!activeBuyer) {
       return {
         ok: false,
-        error: "Debes iniciar sesión antes de realizar una compra.",
+        error: "Completa tus datos de entrega antes de confirmar tu pedido.",
       };
     }
 
@@ -1661,14 +1956,28 @@ export class SupabaseEcoBancoRepository {
       return {
         ok: false,
         error:
-          "Debes completar tu número de WhatsApp y dirección de entrega antes de confirmar tu compra.",
+          "Debes completar tu número de WhatsApp y dirección de entrega antes de confirmar tu pedido.",
       };
     }
 
-    const priceMotes = Number(product.price_motes);
-    if (!Number.isFinite(priceMotes) || priceMotes <= 0) {
+    const unitPrice = Number(product.price_motes);
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
       return { ok: false, error: "Precio del producto inválido." };
     }
+
+    const rawQty = Number(orderOptions?.quantity ?? 1);
+    const quantity = Number.isFinite(rawQty)
+      ? Math.min(20, Math.max(1, Math.round(rawQty)))
+      : 1;
+    const specialNotes = (orderOptions?.specialNotes || "")
+      .trim()
+      .slice(0, 240);
+    const priceMotes = Math.round(unitPrice * quantity * 100) / 100;
+    const formattedProductName = encodeOrderProductName(
+      product.name,
+      quantity,
+      specialNotes
+    );
 
     const buyerMotes = Number(activeBuyer.motes_balance ?? 0);
     const buyerFiatBs = Number(activeBuyer.fiat_balance_bs ?? 0);
@@ -1692,7 +2001,7 @@ export class SupabaseEcoBancoRepository {
         return {
           ok: false,
           error:
-            "Tu billetera de MOTES aún no está activa. Suscríbete al Club Vecino (100 Bs/mes) o paga con tu saldo en Bolivianos (Bs).",
+            "Aún no tienes MOTES activos. Paga con QR el monto exacto de tu pedido o usa tu saldo en Bs.",
         };
       }
       if (buyerMotes < priceMotes) {
@@ -1706,7 +2015,7 @@ export class SupabaseEcoBancoRepository {
       if (buyerFiatBs < priceMotes) {
         return {
           ok: false,
-          error: `Saldo insuficiente en Bolivianos (Bs). Necesitas ${priceMotes} Bs y tienes ${buyerFiatBs} Bs. Carga saldo con QR de tu banco en Mi Perfil.`,
+          error: `Saldo insuficiente en Bolivianos (Bs). Necesitas ${priceMotes} Bs y tienes ${buyerFiatBs} Bs. Genera el QR para pagar el monto exacto de tu pedido.`,
         };
       }
       nextBuyerFiat = buyerFiatBs - priceMotes;
@@ -1719,19 +2028,10 @@ export class SupabaseEcoBancoRepository {
       } else {
         return {
           ok: false,
-          error: `Saldo insuficiente para confirmar esta compra (${priceMotes} Bs). Tu saldo actual es ${buyerFiatBs} Bs${
-            buyerMotesEnabled ? ` y ${buyerMotes} MOTES` : ""
-          }. Carga saldo con QR de tu banco en Mi Perfil.`,
+          error: `Para confirmar este pedido de ${priceMotes} Bs, genera el QR de pago exacto o completa tu saldo en Mi Libreta.`,
         };
       }
     }
-
-    const sellerAccount = users.find(
-      (u) =>
-        u.role === "merchant" &&
-        (u.id === product.seller_id ||
-          u.store_name?.toLowerCase() === product.seller_name.toLowerCase())
-    );
 
     const sellerFreeDeliveries = Number(
       sellerAccount?.free_deliveries_remaining ?? 0
@@ -1760,8 +2060,8 @@ export class SupabaseEcoBancoRepository {
     try {
       onchainEscrow = await deployAndFundMultiReleaseOrder({
         engagementId,
-        title: product.name,
-        description: `Compra Protegida EcoBanco: ${product.name} (${
+        title: formattedProductName.slice(0, 100),
+        description: `Pago Protegido EcoBanco: ${formattedProductName} (${
           sellerAccount?.store_name || product.seller_name
         })`,
         sellerStellarAddress: sellerAccount?.stellar_address || null,
@@ -1816,7 +2116,9 @@ export class SupabaseEcoBancoRepository {
       fund_tx_hash: onchainEscrow.fundTxHash,
       release_tx_hash: null,
       product_id: product.id,
-      product_name: product.name,
+      product_name: formattedProductName,
+      quantity,
+      special_notes: specialNotes || null,
       seller_id: sellerAccount?.id || product.seller_id || null,
       seller_name: sellerAccount?.store_name || product.seller_name,
       buyer_id: activeBuyer.id,
@@ -1838,7 +2140,9 @@ export class SupabaseEcoBancoRepository {
       engagement_id: onchainEscrow.engagementId,
       fund_tx_hash: onchainEscrow.fundTxHash,
       release_tx_hash: null,
-      product_name: product.name,
+      product_name: formattedProductName,
+      quantity,
+      special_notes: specialNotes || null,
       amount_motes: priceMotes,
       buyer_id: activeBuyer.id,
       buyer_name: activeBuyer.store_name || activeBuyer.name || "Vecino",
@@ -1874,7 +2178,12 @@ export class SupabaseEcoBancoRepository {
         activeBuyer.store_name || activeBuyer.name
       ),
       order: insertedOrder,
-      delivery: insertedDelivery,
+      delivery: {
+        ...insertedDelivery,
+        product_name: product.name,
+        quantity,
+        special_notes: specialNotes || null,
+      },
     };
   }
 
@@ -1882,10 +2191,20 @@ export class SupabaseEcoBancoRepository {
   // Verificación de Confianza y Flujo de Repartidores (100% PostgreSQL remoto)
   // ============================================================================
   public async getDeliveriesState(session: EcoBancoSession): Promise<{
+    authorized: boolean;
     rider: Rider | null;
     deliveries: Delivery[];
     orders: Order[];
   }> {
+    if (!session.riderId && !session.merchantId) {
+      return {
+        authorized: false,
+        rider: null,
+        deliveries: [],
+        orders: [],
+      };
+    }
+
     const [rawDeliveries, orders, users] = await Promise.all([
       supabaseTables.listDeliveries(),
       supabaseTables.listOrders(),
@@ -1893,13 +2212,134 @@ export class SupabaseEcoBancoRepository {
     ]);
 
     const riderRow = session.riderId
-      ? users.find((u) => isRiderUserRow(u) && u.id === session.riderId) || null
+      ? users.find(
+          (u) =>
+            isRiderUserRow(u) &&
+            u.id === session.riderId &&
+            u.rider_verified === true
+        ) || null
       : null;
 
+    const merchantRow = session.merchantId
+      ? users.find(
+          (u) => u.role === "merchant" && u.id === session.merchantId
+        ) || null
+      : null;
+
+    if (!riderRow && !merchantRow) {
+      return {
+        authorized: false,
+        rider: null,
+        deliveries: [],
+        orders: [],
+      };
+    }
+
+    const enriched = enrichDeliveriesWithContext(rawDeliveries, orders, users);
+    const merchantStoreLower = (merchantRow?.store_name || "").toLowerCase();
+
+    const filteredDeliveries = enriched.filter((d) => {
+      const allowedForRider = Boolean(
+        riderRow &&
+          ((normalizeDeliveryStatus(d.delivery_status) === "pending" &&
+            !d.rider_id) ||
+            d.rider_id === riderRow.id)
+      );
+      const allowedForMerchant = Boolean(
+        merchantRow &&
+          (d.seller_id === merchantRow.id ||
+            (merchantStoreLower &&
+              (d.seller_name || "").toLowerCase() === merchantStoreLower))
+      );
+      return allowedForRider || allowedForMerchant;
+    });
+
+    const allowedOrderIds = new Set(
+      filteredDeliveries.map((d) => d.order_id).filter(Boolean)
+    );
+    const filteredOrders = orders.filter((o) => allowedOrderIds.has(o.id));
+
     return {
+      authorized: true,
       rider: riderRow ? mapRiderRow(riderRow, true) : null,
-      deliveries: enrichDeliveriesWithContext(rawDeliveries, orders, users),
-      orders,
+      deliveries: filteredDeliveries,
+      orders: filteredOrders,
+    };
+  }
+
+  public async loginRider(
+    identifier: string,
+    secret: string
+  ): Promise<{ ok: boolean; error?: string; rider?: Rider }> {
+    const normalize = (str: string) =>
+      str
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim()
+        .toLowerCase();
+
+    const cleanId = normalize(identifier || "");
+    const cleanPhone =
+      normalizeBolivianPhone(identifier) ??
+      (identifier || "").replace(/\s+/g, "").trim();
+    const cleanCode = (identifier || "").trim().toUpperCase();
+    const cleanSecret = (secret || "").trim();
+
+    if (!cleanId) {
+      return {
+        ok: false,
+        error: "Ingresa tu número de WhatsApp o credencial ECO-R-XXXX.",
+      };
+    }
+
+    if (!cleanSecret) {
+      return {
+        ok: false,
+        error: "Ingresa tu clave secreta de 4 números (PIN) o tu número de CI.",
+      };
+    }
+
+    const users = await supabaseTables.listUsers();
+    const found = users.find(
+      (u) =>
+        isRiderUserRow(u) &&
+        ((cleanPhone && areSameBolivianPhone(u.phone, cleanPhone)) ||
+          (cleanCode &&
+            (u.rider_invite_code || "").toUpperCase() === cleanCode) ||
+          (cleanId && normalize(u.name) === cleanId))
+    );
+
+    if (!found) {
+      return {
+        ok: false,
+        error:
+          "No encontramos una cuenta de repartidor con ese WhatsApp o credencial.",
+      };
+    }
+
+    if (!found.rider_verified) {
+      return {
+        ok: false,
+        error: "Tu cuenta de repartidor aún no está verificada.",
+      };
+    }
+
+    const storedPassword = (found.password || "").trim();
+    if (storedPassword) {
+      if (cleanSecret !== storedPassword) {
+        return { ok: false, error: "Clave PIN o CI incorrecto." };
+      }
+    } else {
+      const normSecret = cleanSecret.replace(/\s+/g, "").toUpperCase();
+      const normCi = (found.ci_number || "").replace(/\s+/g, "").toUpperCase();
+      if (!normCi || normSecret !== normCi) {
+        return { ok: false, error: "Clave PIN o CI incorrecto." };
+      }
+    }
+
+    return {
+      ok: true,
+      rider: mapRiderRow(found, true),
     };
   }
 
@@ -1909,17 +2349,21 @@ export class SupabaseEcoBancoRepository {
     vehicleType: RiderVehicleType;
     address: string;
     ciNumber: string;
+    password?: string;
     selfieUrl: string;
     ciPhotoUrl: string;
     pollarUserId?: string;
     stellarAddress?: string;
   }): Promise<{ ok: boolean; error?: string; rider?: Rider }> {
     const cleanName = (input.name || "").trim();
-    const cleanPhone = (input.phone || "").replace(/\s+/g, "").trim();
+    const cleanPhone =
+      normalizeBolivianPhone(input.phone) ??
+      (input.phone || "").replace(/\s+/g, "").trim();
     const vehicleType: RiderVehicleType =
       input.vehicleType === "moto_electrica" ? "moto_electrica" : "bicicleta";
     const cleanAddress = (input.address || "").trim();
     const cleanCi = (input.ciNumber || "").trim();
+    const cleanPin = (input.password || "").replace(/\D/g, "").slice(0, 4);
     const cleanSelfie = (input.selfieUrl || "").trim();
     const cleanCiPhoto = (input.ciPhotoUrl || "").trim();
     const cleanPollarUserId = input.pollarUserId?.trim() || null;
@@ -1944,10 +2388,18 @@ export class SupabaseEcoBancoRepository {
       };
     }
 
+    if (cleanPin.length !== 4) {
+      return {
+        ok: false,
+        error:
+          "Crea tu clave secreta de 4 números (PIN) para proteger tu cuenta de repartidor.",
+      };
+    }
+
     const users = await supabaseTables.listUsers();
 
     const phoneConflict = users.find(
-      (u) => u.phone === cleanPhone && !isRiderUserRow(u)
+      (u) => areSameBolivianPhone(u.phone, cleanPhone) && !isRiderUserRow(u)
     );
     if (phoneConflict) {
       return {
@@ -1958,10 +2410,17 @@ export class SupabaseEcoBancoRepository {
     }
 
     const existingDbRider = users.find(
-      (u) => isRiderUserRow(u) && u.phone === cleanPhone
+      (u) => isRiderUserRow(u) && areSameBolivianPhone(u.phone, cleanPhone)
     );
+    if (existingDbRider) {
+      return {
+        ok: false,
+        error:
+          "Ya existe un repartidor registrado con ese número de WhatsApp. Ingresa desde la pestaña Ingresar.",
+      };
+    }
 
-    const riderId = existingDbRider?.id || `rid-${Date.now()}`;
+    const riderId = `rid-${Date.now()}`;
 
     const resolvedSelfieUrl = cleanSelfie.startsWith("data:")
       ? (
@@ -1983,38 +2442,7 @@ export class SupabaseEcoBancoRepository {
         ).publicUrl
       : cleanCiPhoto;
 
-    const existingCode = existingDbRider?.rider_invite_code || "";
-    const riderInviteCode =
-      existingCode && existingCode.startsWith("ECO-R-")
-        ? existingCode
-        : generateUniqueRiderInviteCode(users);
-
-    if (existingDbRider) {
-      const updated = await supabaseTables.updateUser(existingDbRider.id, {
-        role: "rider",
-        name: cleanName,
-        store_name: vehicleType,
-        address: cleanAddress,
-        delivery_address: cleanAddress,
-        avatar_url: resolvedSelfieUrl,
-        profile_completed: true,
-        phone: cleanPhone,
-        motes_enabled: true,
-        fiat_wallet_enabled: true,
-        ci_number: cleanCi,
-        selfie_url: resolvedSelfieUrl,
-        ci_photo_url: resolvedCiPhotoUrl,
-        rider_verified: true,
-        rider_invite_code: riderInviteCode,
-        referral_code: riderInviteCode,
-        ...(cleanPollarUserId ? { pollar_user_id: cleanPollarUserId } : {}),
-        ...(cleanStellarAddress ? { stellar_address: cleanStellarAddress } : {}),
-      });
-      return {
-        ok: true,
-        rider: mapRiderRow(updated || existingDbRider, true),
-      };
-    }
+    const riderInviteCode = generateUniqueRiderInviteCode(users);
 
     const newRiderRow: SupabaseUserRow = {
       id: riderId,
@@ -2028,7 +2456,7 @@ export class SupabaseEcoBancoRepository {
       avatar_url: resolvedSelfieUrl,
       profile_completed: true,
       phone: cleanPhone,
-      password: null,
+      password: cleanPin,
       bank_qr_url: "",
       email: null,
       is_prosumer: false,
@@ -2499,7 +2927,7 @@ export class SupabaseEcoBancoRepository {
 
     await supabaseTables.updateUser(targetId, patch);
 
-    const state = await this.getState(session);
+    const state = await this.getSessionUsers(session);
     return {
       ok: true,
       buyer: state.buyer,

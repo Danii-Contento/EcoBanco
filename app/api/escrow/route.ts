@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readSession } from "@/app/lib/session";
 import { db } from "@/app/lib/store";
+import { sanitizeUserError } from "@/app/lib/friendlyCopy";
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,6 +16,8 @@ export async function POST(request: NextRequest) {
       orderId,
       deliveryPin,
       preSignedDeployXdr,
+      quantity,
+      specialNotes,
     } = body;
 
     if (action === "release") {
@@ -25,20 +28,46 @@ export async function POST(request: NextRequest) {
       });
 
       if (!releaseResult.ok) {
+        console.error("[EcoBanco Escrow Audit][RELEASE_ERROR]", {
+          orderId: orderId ?? null,
+          deliveryId: deliveryId ?? null,
+          error: releaseResult.error,
+        });
         const statusCode = releaseResult.error?.includes("rider_verified")
           ? 403
           : 400;
         return NextResponse.json(
-          { error: releaseResult.error },
+          { error: sanitizeUserError(releaseResult.error) },
           { status: statusCode }
         );
       }
+
+      console.info("[EcoBanco Escrow Audit][RELEASE_OK]", {
+        orderId: releaseResult.order?.id ?? orderId ?? null,
+        deliveryId: releaseResult.delivery?.id ?? deliveryId ?? null,
+        contractId:
+          releaseResult.order?.contract_id ??
+          releaseResult.delivery?.contract_id ??
+          null,
+        engagementId:
+          releaseResult.order?.engagement_id ??
+          releaseResult.delivery?.engagement_id ??
+          null,
+        fundTxHash:
+          releaseResult.order?.fund_tx_hash ??
+          releaseResult.delivery?.fund_tx_hash ??
+          null,
+        releaseTxHash:
+          releaseResult.order?.release_tx_hash ??
+          releaseResult.delivery?.release_tx_hash ??
+          null,
+      });
 
       const state = await db.getState(session);
       return NextResponse.json(
         {
           message:
-            "Escrow liberado con éxito. Fondos acreditados a la caserita y tarifa acreditada al repartidor EcoDohmi.",
+            "Pago Protegido entregado con éxito. Fondos acreditados a la caserita y tarifa acreditada al repartidor.",
           delivery: releaseResult.delivery,
           order: releaseResult.order,
           rider: releaseResult.rider,
@@ -49,7 +78,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const products = await db.getProducts();
+    const products = await db.getProducts({ includeClosed: true });
     const product = products.find((p) => p.id === productId);
     if (!product) {
       return NextResponse.json(
@@ -70,20 +99,40 @@ export async function POST(request: NextRequest) {
       product.id,
       resolvedBuyerType,
       resolvedMethod,
-      preSignedDeployXdr ? String(preSignedDeployXdr) : null
+      preSignedDeployXdr ? String(preSignedDeployXdr) : null,
+      {
+        quantity: quantity !== undefined ? Number(quantity) : 1,
+        specialNotes: specialNotes ? String(specialNotes) : undefined,
+      }
     );
     const state = await db.getState(session);
 
     if (!result.ok) {
+      console.error("[EcoBanco Escrow Audit][DEPLOY_ERROR]", {
+        productId: product.id,
+        buyerType: resolvedBuyerType,
+        error: result.error,
+      });
       return NextResponse.json(
         {
-          error: result.error,
+          error: sanitizeUserError(result.error),
           buyer: state.buyer,
           merchant: state.merchant,
         },
         { status: 400 }
       );
     }
+
+    console.info("[EcoBanco Escrow Audit][DEPLOY_FUND_OK]", {
+      orderId: result.order?.id ?? null,
+      deliveryId: result.delivery?.id ?? null,
+      contractId:
+        result.order?.contract_id ?? result.receipt?.contractId ?? null,
+      engagementId:
+        result.order?.engagement_id ?? result.receipt?.engagementId ?? null,
+      fundTxHash:
+        result.order?.fund_tx_hash ?? result.receipt?.fundTxHash ?? null,
+    });
 
     return NextResponse.json(
       {
@@ -95,9 +144,10 @@ export async function POST(request: NextRequest) {
       },
       { status: 201 }
     );
-  } catch {
+  } catch (err) {
+    console.error("[EcoBanco Escrow Audit][UNHANDLED_ERROR]", err);
     return NextResponse.json(
-      { error: "No se pudo procesar la operación de Escrow." },
+      { error: sanitizeUserError(err) },
       { status: 500 }
     );
   }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { readSession } from "@/app/lib/session";
 import {
   getStoredObject,
   isValidBucket,
@@ -54,6 +55,20 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 }
       );
+    }
+
+    if (
+      bucket === "avatars" ||
+      bucket === "product-images" ||
+      bucket === "qr-bancarios"
+    ) {
+      const session = readSession(request);
+      if (!session.merchantId) {
+        return NextResponse.json(
+          { error: "Debes iniciar sesión como caserita para subir archivos." },
+          { status: 401 }
+        );
+      }
     }
 
     if (!dataUrl || typeof dataUrl !== "string") {

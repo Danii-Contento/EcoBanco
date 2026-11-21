@@ -6,7 +6,31 @@ import { RiderVehicleType } from "@/app/types/ecobanco";
 export async function GET(request: NextRequest) {
   try {
     const session = readSession(request);
+    if (!session.riderId && !session.merchantId) {
+      return NextResponse.json(
+        {
+          error: "Debes iniciar sesión para acceder a los pedidos y entregas.",
+          rider: null,
+          deliveries: [],
+          orders: [],
+        },
+        { status: 401 }
+      );
+    }
+
     const state = await db.getDeliveriesState(session);
+    if (!state.authorized) {
+      return NextResponse.json(
+        {
+          error: "Debes iniciar sesión para acceder a los pedidos y entregas.",
+          rider: null,
+          deliveries: [],
+          orders: [],
+        },
+        { status: 401 }
+      );
+    }
+
     return NextResponse.json({
       rider: state.rider,
       deliveries: state.deliveries,
@@ -26,8 +50,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const {
       action,
+      identifier,
       name,
       phone,
+      password,
       vehicleType,
       address,
       ciNumber,
@@ -42,6 +68,24 @@ export async function POST(request: NextRequest) {
       stellarAddress,
     } = body;
 
+    if (action === "rider_login") {
+      const result = await db.loginRider(
+        String(identifier || phone || ""),
+        String(password || pin || body.secret || "")
+      );
+      if (!result.ok || !result.rider) {
+        return NextResponse.json({ error: result.error }, { status: 401 });
+      }
+      const nextSession = { ...session, riderId: result.rider.id };
+      const state = await db.getDeliveriesState(nextSession);
+      const res = NextResponse.json({
+        rider: result.rider,
+        deliveries: state.deliveries,
+        orders: state.orders,
+      });
+      return applySessionCookie(res, nextSession);
+    }
+
     if (action === "rider_onboarding") {
       const resolvedVehicle: RiderVehicleType =
         vehicleType === "moto_electrica" ? "moto_electrica" : "bicicleta";
@@ -52,6 +96,7 @@ export async function POST(request: NextRequest) {
         vehicleType: resolvedVehicle,
         address: String(address || ""),
         ciNumber: String(ciNumber || ""),
+        password: String(password || pin || ""),
         selfieUrl: String(selfieUrl || ""),
         ciPhotoUrl: resolvedCiPhoto,
         pollarUserId:
@@ -87,16 +132,21 @@ export async function POST(request: NextRequest) {
     if (action === "rider_logout") {
       const nextSession = { ...session };
       delete nextSession.riderId;
-      const state = await db.getDeliveriesState(nextSession);
       const res = NextResponse.json({
-        rider: state.rider,
-        deliveries: state.deliveries,
-        orders: state.orders,
+        rider: null,
+        deliveries: [],
+        orders: [],
       });
       return applySessionCookie(res, nextSession);
     }
 
     if (action === "accept_delivery") {
+      if (!session.riderId) {
+        return NextResponse.json(
+          { error: "Debes iniciar sesión como repartidor para tomar pedidos." },
+          { status: 401 }
+        );
+      }
       const result = await db.acceptDelivery(session, String(deliveryId || ""));
       if (!result.ok) {
         const statusCode = result.error?.includes("rider_verified") ? 403 : 400;
@@ -115,6 +165,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "validate_pickup") {
+      if (!session.riderId) {
+        return NextResponse.json(
+          { error: "Debes iniciar sesión como repartidor para validar recojos." },
+          { status: 401 }
+        );
+      }
       const result = await db.validatePickupPin(
         session,
         String(deliveryId || ""),
@@ -137,6 +193,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "validate_delivery") {
+      if (!session.riderId) {
+        return NextResponse.json(
+          { error: "Debes iniciar sesión como repartidor para confirmar entregas." },
+          { status: 401 }
+        );
+      }
       const result = await db.validateDeliveryPin(
         session,
         String(deliveryId || ""),

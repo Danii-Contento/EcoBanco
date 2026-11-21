@@ -5,17 +5,123 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
+  :root,
+  html[data-theme="light"] {
+    color-scheme: light;
+    --eco-bg: #FAF7F2;
+    --eco-bg-rgb: 250 247 242;
+    --eco-bg-glow-1: rgba(26, 107, 78, 0.06);
+    --eco-bg-glow-2: rgba(229, 160, 36, 0.09);
+    --eco-bg-glow-3: rgba(217, 83, 47, 0.05);
+    --eco-surface: #FFFFFF;
+    --eco-surface-rgb: 255 255 255;
+    --eco-surface-soft: #F3ECE1;
+    --eco-surface-soft-rgb: 243 236 225;
+    --eco-surface-accent: #FFF9EE;
+    --eco-surface-green: #EEF7F3;
+    --eco-inset: #F6EFE5;
+    --eco-input-bg: #FFFFFF;
+    --eco-border: #E6DDD0;
+    --eco-border-rgb: 230 221 208;
+    --eco-border-strong: rgba(229, 160, 36, 0.55);
+    --eco-border-green: rgba(26, 107, 78, 0.35);
+    --eco-primary: #1A6B4E;
+    --eco-primary-rgb: 26 107 78;
+    --eco-primary-hover: #14553D;
+    --eco-primary-hover-rgb: 20 85 61;
+    --eco-accent: #D9532F;
+    --eco-accent-rgb: 217 83 47;
+    --eco-accent-hover: #BD4322;
+    --eco-accent-hover-rgb: 189 67 34;
+    --eco-sol: #E5A024;
+    --eco-sol-rgb: 229 160 36;
+    --eco-text: #1C1B1A;
+    --eco-text-rgb: 28 27 26;
+    --eco-text-muted: #57534E;
+    --eco-text-muted-rgb: 87 83 78;
+    --eco-text-gold: #9A5B00;
+    --eco-text-green: #1A6B4E;
+    --eco-shadow: 0 10px 26px -10px rgba(115, 68, 31, 0.14), 0 2px 6px rgba(28, 27, 26, 0.05);
+    --eco-pin-bg: #14201C;
+    --eco-pin-text: #FED053;
+    --eco-pin-sub: #F7EBD2;
+    --eco-error-bg: #FEF2F2;
+    --eco-error-border: #F87171;
+    --eco-error-text: #991B1B;
+    --eco-success-bg: #EEF7F3;
+    --eco-success-border: #1A6B4E;
+    --eco-success-text: #14553D;
+    --eco-ghost-bg: #FFFFFF;
+    --eco-ghost-hover: #F3ECE1;
+    --eco-danger-bg: #FEF2F2;
+    --eco-danger-border: #FCA5A5;
+    --eco-danger-text: #B91C1C;
+  }
+
+  html.dark,
+  html[data-theme="dark"] {
     color-scheme: dark;
+    --eco-bg: #14201C;
+    --eco-bg-rgb: 20 32 28;
+    --eco-bg-glow-1: rgba(76, 175, 80, 0.08);
+    --eco-bg-glow-2: rgba(224, 162, 48, 0.08);
+    --eco-bg-glow-3: rgba(115, 68, 31, 0.12);
+    --eco-surface: #182822;
+    --eco-surface-rgb: 24 40 34;
+    --eco-surface-soft: #14221D;
+    --eco-surface-soft-rgb: 20 34 29;
+    --eco-surface-accent: #1D2B24;
+    --eco-surface-green: #173023;
+    --eco-inset: #0F1A16;
+    --eco-input-bg: #0D1714;
+    --eco-border: rgba(247, 235, 210, 0.18);
+    --eco-border-rgb: 45 66 58;
+    --eco-border-strong: rgba(224, 162, 48, 0.52);
+    --eco-border-green: rgba(76, 175, 80, 0.55);
+    --eco-primary: #4CAF50;
+    --eco-primary-rgb: 76 175 80;
+    --eco-primary-hover: #43A047;
+    --eco-primary-hover-rgb: 67 160 71;
+    --eco-accent: #D9532F;
+    --eco-accent-rgb: 217 83 47;
+    --eco-accent-hover: #BD4322;
+    --eco-accent-hover-rgb: 189 67 34;
+    --eco-sol: #FED053;
+    --eco-sol-rgb: 254 208 83;
+    --eco-text: #F7EBD2;
+    --eco-text-rgb: 247 235 210;
+    --eco-text-muted: rgba(247, 235, 210, 0.8);
+    --eco-text-muted-rgb: 212 201 179;
+    --eco-text-gold: #FED053;
+    --eco-text-green: #69D86E;
+    --eco-shadow: 0 12px 28px -8px rgba(0, 0, 0, 0.45);
+    --eco-pin-bg: #0B1410;
+    --eco-pin-text: #FED053;
+    --eco-pin-sub: #F7EBD2;
+    --eco-error-bg: rgba(239, 68, 68, 0.2);
+    --eco-error-border: rgba(248, 113, 113, 0.6);
+    --eco-error-text: #FEE2E2;
+    --eco-success-bg: rgba(76, 175, 80, 0.22);
+    --eco-success-border: #4CAF50;
+    --eco-success-text: #F7EBD2;
+    --eco-ghost-bg: #182822;
+    --eco-ghost-hover: #21362E;
+    --eco-danger-bg: rgba(239, 68, 68, 0.18);
+    --eco-danger-border: rgba(248, 113, 113, 0.48);
+    --eco-danger-text: #FECACA;
   }
 
   body {
-    @apply bg-bosque text-arena font-sans antialiased selection:bg-oro selection:text-bosque;
-    background-image: 
-      radial-gradient(circle at 15% 10%, rgba(76, 175, 80, 0.08) 0%, transparent 40%),
-      radial-gradient(circle at 85% 20%, rgba(224, 162, 48, 0.08) 0%, transparent 40%),
-      radial-gradient(circle at 50% 90%, rgba(115, 68, 31, 0.12) 0%, transparent 50%);
+    background-color: var(--eco-bg);
+    color: var(--eco-text);
+    font-size: 16px;
+    @apply font-sans antialiased selection:bg-sol selection:text-bosque;
+    background-image:
+      radial-gradient(circle at 15% 10%, var(--eco-bg-glow-1) 0%, transparent 40%),
+      radial-gradient(circle at 85% 20%, var(--eco-bg-glow-2) 0%, transparent 40%),
+      radial-gradient(circle at 50% 90%, var(--eco-bg-glow-3) 0%, transparent 50%);
     min-height: 100vh;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 
   h1, h2, .font-brand {
@@ -23,15 +129,158 @@
   }
 }
 
+@layer components {
+  .aguayo-thread {
+    height: 4px;
+    width: 100%;
+    background: linear-gradient(
+      90deg,
+      #C81D66 0% 25%,
+      #1A6B4E 25% 50%,
+      #E5A024 50% 75%,
+      #D9532F 75% 100%
+    );
+  }
+
+  .eco-page {
+    background-color: var(--eco-bg);
+    color: var(--eco-text);
+  }
+
+  .eco-card {
+    background-color: var(--eco-surface);
+    border: 1.5px solid var(--eco-border);
+    box-shadow: var(--eco-shadow);
+    color: var(--eco-text);
+  }
+
+  .eco-card-gold {
+    background-color: var(--eco-surface-accent);
+    border: 2px solid var(--eco-border-strong);
+    box-shadow: var(--eco-shadow);
+    color: var(--eco-text);
+  }
+
+  .eco-card-green {
+    background-color: var(--eco-surface-green);
+    border: 2px solid var(--eco-border-green);
+    box-shadow: var(--eco-shadow);
+    color: var(--eco-text);
+  }
+
+  .eco-inset {
+    background-color: var(--eco-inset);
+    border: 1.5px solid var(--eco-border);
+    color: var(--eco-text);
+  }
+
+  .eco-input {
+    background-color: var(--eco-input-bg);
+    border: 2px solid var(--eco-border-strong);
+    color: var(--eco-text);
+  }
+
+  .eco-input::placeholder {
+    color: var(--eco-text-muted);
+    opacity: 0.72;
+  }
+
+  .eco-input:focus {
+    outline: none;
+    border-color: var(--eco-sol);
+  }
+
+  .eco-btn-primary {
+    background-color: var(--eco-primary);
+    color: #FFFFFF;
+    min-height: 48px;
+    transition: background-color 0.15s ease, transform 0.15s ease;
+  }
+
+  .eco-btn-primary:hover {
+    background-color: var(--eco-primary-hover);
+  }
+
+  html.dark .eco-btn-primary,
+  html[data-theme="dark"] .eco-btn-primary {
+    color: #14201C;
+  }
+
+  .eco-btn-accent {
+    background-color: var(--eco-accent);
+    color: #FFFFFF;
+    min-height: 48px;
+    transition: background-color 0.15s ease, transform 0.15s ease;
+  }
+
+  .eco-btn-accent:hover {
+    background-color: var(--eco-accent-hover);
+  }
+
+  .eco-btn-ghost {
+    background-color: var(--eco-ghost-bg);
+    border: 1.5px solid var(--eco-border);
+    color: var(--eco-text);
+  }
+
+  .eco-btn-ghost:hover {
+    background-color: var(--eco-ghost-hover);
+    border-color: var(--eco-sol);
+  }
+
+  .eco-btn-danger {
+    background-color: var(--eco-danger-bg);
+    border: 1.5px solid var(--eco-danger-border);
+    color: var(--eco-danger-text);
+  }
+
+  .eco-alert-error {
+    background-color: var(--eco-error-bg);
+    border: 1.5px solid var(--eco-error-border);
+    color: var(--eco-error-text);
+  }
+
+  .eco-alert-success {
+    background-color: var(--eco-success-bg);
+    border: 1.5px solid var(--eco-success-border);
+    color: var(--eco-success-text);
+  }
+
+  .eco-pin-box {
+    background-color: var(--eco-pin-bg);
+    color: var(--eco-pin-sub);
+  }
+
+  .eco-pin-digits {
+    color: var(--eco-pin-text);
+  }
+
+  .eco-text {
+    color: var(--eco-text);
+  }
+
+  .eco-text-muted {
+    color: var(--eco-text-muted);
+  }
+
+  .eco-text-gold {
+    color: var(--eco-text-gold);
+  }
+
+  .eco-text-green {
+    color: var(--eco-text-green);
+  }
+}
+
 @layer utilities {
   .wallet-inset {
-    box-shadow: inset 0 4px 14px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(247, 235, 210, 0.08);
+    box-shadow: var(--eco-shadow);
   }
 }
 
 /* ============================================================================
-   Envoltura visual "Cripto-Cero" para <RampWidget> (Recargas en Bolivianos Bs)
-   Oculta etiquetas internas de USDC, crypto, network, swap y branding técnico.
+   Envoltura visual comunitaria para el diálogo de Recarga con QR en Bs
+   Se adapta automáticamente al tema claro (por defecto) y al tema oscuro.
    ============================================================================ */
 .pollar-overlay {
   --pollar-overlay-z-index: 90 !important;
@@ -39,11 +288,28 @@
 }
 
 body.ecobanco-qr-ramp-active .pollar-overlay {
-  background-color: rgba(10, 17, 14, 0.86) !important;
+  background-color: rgba(20, 32, 28, 0.7) !important;
   backdrop-filter: blur(6px);
 }
 
 body.ecobanco-qr-ramp-active .pollar-ramp-modal {
+  --pollar-bg: #FFFFFF !important;
+  --pollar-border: rgba(229, 160, 36, 0.55) !important;
+  --pollar-text: #1C1B1A !important;
+  --pollar-muted: #57534E !important;
+  --pollar-input-bg: #FAF7F2 !important;
+  --pollar-accent: #E5A024 !important;
+  --pollar-btn-primary-fg: #1C1B1A !important;
+  --pollar-modal-border-radius: 1.25rem !important;
+  --pollar-buttons-border-radius: 0.875rem !important;
+  --pollar-buttons-height: 52px !important;
+  --pollar-input-height: 52px !important;
+  border-width: 2px !important;
+  box-shadow: 0 18px 42px rgba(28, 27, 26, 0.22) !important;
+}
+
+html.dark body.ecobanco-qr-ramp-active .pollar-ramp-modal,
+html[data-theme="dark"] body.ecobanco-qr-ramp-active .pollar-ramp-modal {
   --pollar-bg: #14201C !important;
   --pollar-border: rgba(224, 162, 48, 0.55) !important;
   --pollar-text: #F7EBD2 !important;
@@ -51,34 +317,50 @@ body.ecobanco-qr-ramp-active .pollar-ramp-modal {
   --pollar-input-bg: #0D1714 !important;
   --pollar-accent: #E0A230 !important;
   --pollar-btn-primary-fg: #14201C !important;
-  --pollar-modal-border-radius: 1.25rem !important;
-  --pollar-buttons-border-radius: 0.875rem !important;
-  --pollar-buttons-height: 52px !important;
-  --pollar-input-height: 52px !important;
-  border-width: 2px !important;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.65), 0 0 28px rgba(224, 162, 48, 0.22) !important;
 }
 
 body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-modal-title {
   font-family: 'Cooper Black', 'Fraunces', Georgia, serif !important;
   font-size: 1.35rem !important;
+  color: #9A5B00 !important;
+}
+
+html.dark body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-modal-title,
+html[data-theme="dark"] body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-modal-title {
   color: #FED053 !important;
 }
 
 body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-swap-amount {
   font-size: 1.75rem !important;
   font-weight: 800 !important;
+  color: #9A5B00 !important;
+}
+
+html.dark body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-swap-amount,
+html[data-theme="dark"] body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-swap-amount {
   color: #FED053 !important;
 }
 
 body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-btn-primary {
-  background: linear-gradient(90deg, #E0A230 0%, #FED053 50%, #E0A230 100%) !important;
-  color: #14201C !important;
+  background: linear-gradient(90deg, #E5A024 0%, #FED053 50%, #E5A024 100%) !important;
+  color: #1C1B1A !important;
   font-size: 1.05rem !important;
   font-weight: 800 !important;
 }
 
-/* Ocultar paneles de recepción en USDC, swap, cotización crypto, red y footer técnico */
+/* Ocultar paneles técnicos, badges de red y pies de marca externa en todos los diálogos */
+.pollar-modal-card .pollar-footer,
+.pollar-modal-card .pollar-footer-protected,
+.pollar-modal-card .pollar-footer-logo,
+.pollar-modal-card .pollar-footer-version,
+.pollar-modal-card .pollar-chain-tag,
+.pollar-modal-card .pollar-chain-field,
+.pollar-modal-card .pollar-network-logo,
+.pollar-modal-card .pollar-network-pill,
+.pollar-modal-card .pollar-network-tag,
+.pollar-modal-card .pollar-txr-chain,
+.pollar-modal-card .pollar-txr-chain-inline,
 body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-swap-panel[aria-labelledby="pollar-ramp-receive-label"],
 body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-swap-reverse,
 body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-swap-rate-row,
@@ -94,9 +376,9 @@ body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-footer {
   margin: -0.5rem 0 1rem;
   padding: 0.6rem 0.85rem;
   border-radius: 0.75rem;
-  background: rgba(76, 175, 80, 0.16);
-  border: 1px solid rgba(76, 175, 80, 0.5);
-  color: #F7EBD2;
+  background: var(--eco-success-bg);
+  border: 1px solid var(--eco-success-border);
+  color: var(--eco-success-text);
   font-size: 0.8rem;
   font-weight: 700;
   text-align: center;
@@ -105,18 +387,30 @@ body.ecobanco-qr-ramp-active .pollar-ramp-modal .pollar-footer {
 .ecobanco-ramp-download-qr-btn {
   margin-top: 0.75rem;
   width: 100%;
+  min-height: 48px;
   padding: 0.75rem 1rem;
   border-radius: 0.75rem;
-  border: 2px solid #4CAF50;
-  background: rgba(76, 175, 80, 0.2);
-  color: #F7EBD2;
-  font-size: 0.9rem;
+  border: 2px solid #1A6B4E;
+  background: var(--eco-success-bg);
+  color: var(--eco-success-text);
+  font-size: 0.95rem;
   font-weight: 800;
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .ecobanco-ramp-download-qr-btn:hover {
+  background: #14553D;
+  color: #FFFFFF;
+}
+
+html.dark .ecobanco-ramp-download-qr-btn,
+html[data-theme="dark"] .ecobanco-ramp-download-qr-btn {
+  border-color: #4CAF50;
+}
+
+html.dark .ecobanco-ramp-download-qr-btn:hover,
+html[data-theme="dark"] .ecobanco-ramp-download-qr-btn:hover {
   background: #4CAF50;
   color: #14201C;
 }

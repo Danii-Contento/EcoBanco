@@ -28,6 +28,7 @@ export interface SupabaseUserRow {
   password: string | null;
   bank_qr_url: string;
   email: string | null;
+  is_open?: boolean;
   is_prosumer: boolean;
   is_premium?: boolean;
   fiat_wallet_enabled: boolean;
@@ -100,6 +101,8 @@ export interface SupabaseDeliveryRow {
   release_tx_hash?: string | null;
   picked_up_at?: string | null;
   delivered_at?: string | null;
+  quantity?: number;
+  special_notes?: string | null;
   created_at: string;
 }
 
@@ -330,6 +333,8 @@ function normalizeDeliveryRow(raw: SupabaseDeliveryRow): Delivery {
     release_tx_hash: raw.release_tx_hash ?? null,
     picked_up_at: raw.picked_up_at ?? null,
     delivered_at: raw.delivered_at ?? null,
+    quantity: raw.quantity !== undefined ? Number(raw.quantity) : undefined,
+    special_notes: raw.special_notes ?? null,
     created_at: raw.created_at || new Date().toISOString(),
   };
 }
@@ -361,6 +366,8 @@ function toDeliveryDbRow(d: Delivery): SupabaseDeliveryRow {
     release_tx_hash: d.release_tx_hash ?? null,
     picked_up_at: d.picked_up_at ?? null,
     delivered_at: d.delivered_at ?? null,
+    quantity: d.quantity,
+    special_notes: d.special_notes ?? null,
     created_at: d.created_at || new Date().toISOString(),
   };
 }
@@ -400,21 +407,43 @@ function toDeliveryDbPatch(
   return out;
 }
 
+const globalSeedCache = globalThis as unknown as {
+  ecoBancoElianaSeeded?: boolean;
+  ecoBancoElianaSeedPromise?: Promise<void> | null;
+};
+
 export const supabaseTables = {
   async ensureElianaSeeded(): Promise<void> {
-    const existing = await restRequest<SupabaseUserRow[]>("users", {
-      query: `id=eq.${encodeURIComponent(ELIANA_SEED_ROW.id)}&limit=1`,
+    if (globalSeedCache.ecoBancoElianaSeeded) {
+      return;
+    }
+
+    if (globalSeedCache.ecoBancoElianaSeedPromise) {
+      return globalSeedCache.ecoBancoElianaSeedPromise;
+    }
+
+    const seedTask = (async () => {
+      const existing = await restRequest<SupabaseUserRow[]>("users", {
+        query: `id=eq.${encodeURIComponent(ELIANA_SEED_ROW.id)}&limit=1`,
+      });
+
+      if (existing.length === 0) {
+        await restWriteWithSchemaFallback<SupabaseUserRow[]>(
+          "users",
+          "POST",
+          ELIANA_SEED_ROW as unknown as Record<string, unknown>,
+          undefined,
+          "resolution=ignore-duplicates,return=representation"
+        );
+      }
+
+      globalSeedCache.ecoBancoElianaSeeded = true;
+    })().finally(() => {
+      globalSeedCache.ecoBancoElianaSeedPromise = null;
     });
 
-    if (existing.length === 0) {
-      await restWriteWithSchemaFallback<SupabaseUserRow[]>(
-        "users",
-        "POST",
-        ELIANA_SEED_ROW as unknown as Record<string, unknown>,
-        undefined,
-        "resolution=ignore-duplicates,return=representation"
-      );
-    }
+    globalSeedCache.ecoBancoElianaSeedPromise = seedTask;
+    return seedTask;
   },
 
   async listUsers(): Promise<SupabaseUserRow[]> {

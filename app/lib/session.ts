@@ -1,6 +1,13 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
+export {
+  areSameBolivianPhone,
+  extractBolivianLocalDigits,
+  isValidBolivianPhone,
+  normalizeBolivianPhone,
+} from "./phone";
+
 export const SESSION_COOKIE_NAME = "ecobanco_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 días
 
@@ -132,4 +139,41 @@ export function applySessionCookie<T>(
     maxAge: SESSION_MAX_AGE_SECONDS,
   });
   return response;
+}
+
+/**
+ * Indica si existe una sesión de vecino comprador autenticada.
+ */
+export function hasBuyerSession(session: EcoBancoSession): boolean {
+  return Boolean(session.buyerId);
+}
+
+/**
+ * Indica si el visitante está explorando como invitado sin ninguna sesión activa.
+ */
+export function isGuestSession(session: EcoBancoSession): boolean {
+  return !session.buyerId && !session.merchantId && !session.riderId;
+}
+
+/**
+ * Adjunta el identificador del vecino comprador a la sesión preservando otros roles si existieran.
+ */
+export function withBuyerSession(
+  session: EcoBancoSession,
+  buyerId: string
+): EcoBancoSession {
+  return {
+    ...session,
+    buyerId,
+    activeBuyerType: "buyer",
+  };
+}
+
+/**
+ * Remueve la sesión del vecino comprador dejando intactas las demás sesiones de la cookie.
+ */
+export function clearBuyerSession(session: EcoBancoSession): EcoBancoSession {
+  const next: EcoBancoSession = { ...session };
+  delete next.buyerId;
+  return next;
 }

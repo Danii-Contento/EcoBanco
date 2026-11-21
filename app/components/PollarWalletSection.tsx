@@ -1,15 +1,27 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { usePollar } from "@pollar/react";
-import type { AuthState } from "@pollar/core";
 import {
   ensurePollarWalletAndSync,
   ensurePollarWalletProvisioned,
   extractPollarUserId,
-  formatShortStellarAddress,
   PollarSyncResult,
 } from "@/app/lib/pollarWallet";
+import {
+  COMMUNITY_COPY,
+  formatBs,
+  formatMotes,
+  sanitizeUserError,
+  translateBackendMessage,
+} from "@/app/lib/friendlyCopy";
+import {
+  BankQrRechargeModal,
+  RampCreditedEvent,
+  RampPendingEvent,
+  RampPurpose,
+} from "@/app/components/BankQrRechargeModal";
 
 export interface PollarProfileSnapshot {
   email?: string;
@@ -23,28 +35,22 @@ interface PollarWalletSectionProps {
   userId?: string;
   savedStellarAddress?: string | null;
   savedPollarUserId?: string | null;
-  mode?: "auth-entry" | "profile-badge";
+  mode?: "auth-entry" | "profile-badge" | "card";
   compact?: boolean;
+  balanceBs?: number;
+  balanceMotes?: number;
+  rechargeAmountBs?: number;
+  rechargePurpose?: RampPurpose;
+  rechargeSubtitle?: string;
+  movementsHref?: string;
+  movementsCount?: number;
+  onOpenRecharge?: () => void;
+  onViewMovements?: () => void;
+  onRampCredited?: (event: RampCreditedEvent) => void;
+  onRampPending?: (event: RampPendingEvent) => void;
+  onRampError?: (message: string) => void;
   onSynced?: (result: PollarSyncResult) => void;
   onPollarProfileLoaded?: (profile: PollarProfileSnapshot) => void;
-}
-
-function describeAuthStep(authState: AuthState): string | null {
-  switch (authState.step) {
-    case "creating_session":
-      return "Iniciando sesión segura en Pollar...";
-    case "opening_oauth":
-      return "Completa tu acceso con Google en la ventana emergente...";
-    case "sending_email":
-      return "Enviando código OTP a tu correo...";
-    case "entering_code":
-    case "verifying_email_code":
-      return "Verificando código OTP de correo...";
-    case "authenticating":
-      return "Confirmando autenticación en Stellar Testnet...";
-    default:
-      return null;
-  }
 }
 
 export function PollarWalletSection({
@@ -52,29 +58,31 @@ export function PollarWalletSection({
   userId,
   savedStellarAddress,
   savedPollarUserId,
-  mode = "auth-entry",
+  mode = "card",
   compact = false,
+  balanceBs = 0,
+  balanceMotes = 0,
+  rechargeAmountBs = 50,
+  rechargePurpose = "fiat_topup",
+  rechargeSubtitle,
+  movementsHref = "#mis-movimientos",
+  movementsCount,
+  onOpenRecharge,
+  onViewMovements,
+  onRampCredited,
+  onRampPending,
+  onRampError,
   onSynced,
   onPollarProfileLoaded,
 }: PollarWalletSectionProps) {
-  const {
-    getClient,
-    openLoginModal,
-    login,
-    logout,
-    isAuthenticated,
-    wallet,
-    hasWallet,
-    configStatus,
-  } = usePollar();
+  const { getClient, isAuthenticated, wallet, hasWallet } = usePollar();
 
   const client = getClient();
-  const [authState, setAuthState] = useState<AuthState>(() =>
-    client.getAuthState()
-  );
-  const [isProvisioning, setIsProvisioning] = useState<boolean>(false);
   const [syncResult, setSyncResult] = useState<PollarSyncResult | null>(null);
-  const [copied, setCopied] = useState<boolean>(false);
+  const [isRechargeModalOpen, setIsRechargeModalOpen] =
+    useState<boolean>(false);
+  const [localFeedback, setLocalFeedback] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
 
   const onSyncedRef = useRef(onSynced);
   onSyncedRef.current = onSynced;
@@ -83,9 +91,9 @@ export function PollarWalletSection({
   const lastProfileKeyRef = useRef<string>("");
   const lastSyncKeyRef = useRef<string>("");
 
+  // Escucha de estado en silencio para mantener sincronizada la cuenta en segundo plano
   useEffect(() => {
     const unsubscribe = client.onAuthStateChange((next) => {
-      setAuthState(next);
       if (next.step === "idle") {
         setSyncResult(null);
         lastProfileKeyRef.current = "";
@@ -106,7 +114,6 @@ export function PollarWalletSection({
       }
       lastSyncKeyRef.current = syncKey;
 
-      setIsProvisioning(true);
       try {
         const result = userId
           ? await ensurePollarWalletAndSync(client, { userId, role })
@@ -144,13 +151,14 @@ export function PollarWalletSection({
             stellarAddress,
           });
         }
-      } finally {
-        setIsProvisioning(false);
+      } catch {
+        // Inicialización silenciosa: nunca muestra errores técnicos al usuario
       }
     },
     [client, isAuthenticated, role, userId, wallet?.address, wallet?.provisioning]
   );
 
+  // Inicialización silenciosa en segundo plano
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -177,215 +185,166 @@ export function PollarWalletSection({
     runSync,
   ]);
 
-  const effectiveAddress =
-    syncResult?.stellarAddress || wallet?.address || savedStellarAddress || "";
-  const shortAddress = formatShortStellarAddress(effectiveAddress);
-  const provisioningState =
-    syncResult?.provisioning || wallet?.provisioning || null;
-  const activeStepMessage = describeAuthStep(authState);
-
-  const handleCopyAddress = async () => {
-    if (!effectiveAddress) return;
-    try {
-      await navigator.clipboard.writeText(effectiveAddress);
-    } catch {
-      // Fallback silencioso si el portapapeles está bloqueado
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  if (mode === "profile-badge") {
-    return (
-      <div className="rounded-xl bg-[#0D1714] border border-oro/40 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div className="flex flex-wrap items-center gap-2 min-w-0">
-          <span className="px-2 py-0.5 rounded-full bg-oro/20 border border-oro/50 text-brillo font-extrabold uppercase">
-            Stellar Testnet
-          </span>
-
-          {effectiveAddress ? (
-            <>
-              <span
-                title={effectiveAddress}
-                className="font-mono font-bold text-arena"
-              >
-                {shortAddress}
-              </span>
-              <button
-                type="button"
-                onClick={handleCopyAddress}
-                className="px-2 py-0.5 rounded-lg bg-bosque border border-arena/25 text-[11px] font-bold text-brillo hover:border-oro"
-              >
-                {copied ? "✓ Copiado" : "Copiar G..."}
-              </button>
-              {isAuthenticated ? (
-                provisioningState === "READY" ? (
-                  <span className="px-2 py-0.5 rounded-full bg-brote/25 border border-brote/60 text-arena font-bold">
-                    {syncResult?.trustlineReady
-                      ? "✓ USDC Testnet listo"
-                      : isProvisioning
-                      ? "⏳ Activando USDC..."
-                      : "✓ Cuenta READY"}
-                  </span>
-                ) : (
-                  <span className="px-2 py-0.5 rounded-full bg-oro/20 border border-oro/50 text-brillo font-bold">
-                    ⏳ Preparando cuenta G...
-                  </span>
-                )
-              ) : (
-                <button
-                  type="button"
-                  onClick={openLoginModal}
-                  className="px-2.5 py-0.5 rounded-full bg-oro/20 border border-oro/60 text-brillo font-extrabold hover:bg-oro hover:text-bosque transition"
-                >
-                  🔗 Reconectar Pollar
-                </button>
-              )}
-            </>
-          ) : isAuthenticated ? (
-            <span className="text-brillo font-bold">
-              {provisioningState === "FAILED"
-                ? "⚠️ No se pudo aprovisionar tu cuenta G..."
-                : "⏳ Creando cuenta custodial G... y trustline USDC..."}
-            </span>
-          ) : (
-            <span className="text-arena/80 font-semibold">
-              Billetera Stellar no conectada aún
-            </span>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          {!isAuthenticated ? (
-            <button
-              type="button"
-              onClick={openLoginModal}
-              className="px-3 py-1 rounded-lg bg-gradient-to-r from-oro to-brillo text-bosque font-extrabold uppercase tracking-wide text-[11px]"
-            >
-              Conectar Pollar (Google / OTP)
-            </button>
-          ) : (
-            <>
-              {(provisioningState === "FAILED" ||
-                (effectiveAddress && !syncResult?.trustlineReady && !isProvisioning)) && (
-                <button
-                  type="button"
-                  onClick={() => void runSync(true)}
-                  className="px-2.5 py-1 rounded-lg bg-brote/20 border border-brote/60 text-arena font-bold text-[11px]"
-                >
-                  ↻ Reintentar sync
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => logout()}
-                className="px-2.5 py-1 rounded-lg bg-red-500/15 border border-red-400/40 text-red-200 font-bold text-[11px]"
-              >
-                Desconectar Pollar
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    );
+  // En pantallas de ingreso o registro, corre únicamente en silencio sin mostrar elementos de acceso técnico
+  if (mode === "auth-entry") {
+    return null;
   }
 
+  const handleRechargeClick = () => {
+    setLocalFeedback(null);
+    setLocalError(null);
+    if (onOpenRecharge) {
+      onOpenRecharge();
+      return;
+    }
+    setIsRechargeModalOpen(true);
+  };
+
+  const modalRole: "buyer" | "merchant" =
+    role === "merchant" ? "merchant" : "buyer";
+
   return (
-    <div
-      className={`rounded-2xl bg-[#0F1A16] border-2 border-oro/45 ${
-        compact ? "p-3.5 space-y-2.5" : "p-4 space-y-3"
-      }`}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs font-extrabold uppercase tracking-wider text-brillo">
-          🔐 Acceso y Billetera Pollar (Stellar Testnet)
-        </span>
-        {effectiveAddress && (
-          <span className="font-mono text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-brote/25 border border-brote text-arena">
-            {shortAddress}
+    <>
+      <section
+        aria-label={COMMUNITY_COPY.walletTitle}
+        className={`rounded-2xl eco-card-gold ${
+          compact ? "p-4 space-y-3.5" : "p-5 space-y-4"
+        }`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xl" aria-hidden="true">
+              📒
+            </span>
+            <h2 className="font-brand text-xl sm:text-2xl eco-text leading-none">
+              {COMMUNITY_COPY.walletTitle}
+            </h2>
+          </div>
+          <span className="px-3 py-1 rounded-full eco-alert-success text-xs font-extrabold">
+            {COMMUNITY_COPY.moteParity}
           </span>
-        )}
-      </div>
+        </div>
 
-      {!isAuthenticated ? (
+        {/* Saldo claro en Bs y MOTES */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-xl eco-inset p-3.5 space-y-1">
+            <span className="block text-[11px] font-extrabold uppercase tracking-wider eco-text-muted">
+              {COMMUNITY_COPY.balanceBsLabel}
+            </span>
+            <span className="block font-brand text-2xl sm:text-3xl eco-text-gold">
+              {formatBs(balanceBs)}
+            </span>
+          </div>
+
+          <div className="rounded-xl eco-inset p-3.5 space-y-1">
+            <span className="block text-[11px] font-extrabold uppercase tracking-wider eco-text-muted">
+              {COMMUNITY_COPY.balanceMotesLabel}
+            </span>
+            <span className="block font-brand text-2xl sm:text-3xl eco-text-green">
+              {formatMotes(balanceMotes)}
+            </span>
+          </div>
+        </div>
+
+        <p className="text-xs font-semibold eco-text-muted text-center">
+          {COMMUNITY_COPY.moteParityDetail} · {COMMUNITY_COPY.zeroCommission}
+        </p>
+
+        {/* Botón grande Recargar con QR y acceso simple a Mis movimientos */}
         <div className="space-y-2.5">
-          <p className="text-xs text-arena/85 leading-relaxed">
-            Inicia sesión con Google o código OTP a tu correo para crear tu
-            cuenta Stellar custodial (<span className="font-mono">G...</span>)
-            y habilitar recargas reales con QR en Bolivianos (BOB → USDC).
+          <button
+            type="button"
+            onClick={handleRechargeClick}
+            className="w-full py-4 px-5 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-lg sm:text-xl shadow-gold-glow border-2 border-[#fff3cc]/70 active:scale-[0.98] transition"
+          >
+            📲 {COMMUNITY_COPY.rechargeCta}
+          </button>
+
+          {onViewMovements ? (
+            <button
+              type="button"
+              onClick={onViewMovements}
+              className="w-full py-3 px-4 rounded-xl eco-btn-ghost text-sm font-extrabold transition flex items-center justify-center gap-2"
+            >
+              <span>📋 {COMMUNITY_COPY.movementsCta}</span>
+              {typeof movementsCount === "number" && (
+                <span className="px-2 py-0.5 rounded-full bg-oro/20 eco-text-gold text-xs font-extrabold">
+                  {movementsCount}
+                </span>
+              )}
+              <span aria-hidden="true">→</span>
+            </button>
+          ) : (
+            <Link
+              href={movementsHref}
+              className="w-full py-3 px-4 rounded-xl eco-btn-ghost text-sm font-extrabold transition flex items-center justify-center gap-2"
+            >
+              <span>📋 {COMMUNITY_COPY.movementsCta}</span>
+              {typeof movementsCount === "number" && (
+                <span className="px-2 py-0.5 rounded-full bg-oro/20 eco-text-gold text-xs font-extrabold">
+                  {movementsCount}
+                </span>
+              )}
+              <span aria-hidden="true">→</span>
+            </Link>
+          )}
+        </div>
+
+        {localFeedback && (
+          <p className="text-xs font-bold eco-text-green text-center">
+            ✨ {localFeedback}
           </p>
+        )}
+        {localError && (
+          <p className="text-xs font-bold text-red-600 dark:text-red-200 text-center">
+            ⚠️ {localError}
+          </p>
+        )}
+      </section>
 
-          {activeStepMessage && (
-            <div className="p-2.5 rounded-xl bg-oro/15 border border-oro/45 text-xs font-bold text-brillo">
-              ⏳ {activeStepMessage}
-            </div>
-          )}
-
-          {authState.step === "error" && (
-            <div className="p-2.5 rounded-xl bg-red-500/20 border border-red-400/60 text-xs font-bold text-red-100">
-              ⚠️ {authState.message || "No se pudo completar el acceso con Pollar."}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={openLoginModal}
-              disabled={configStatus === "loading"}
-              className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-extrabold text-xs uppercase tracking-wide shadow disabled:opacity-60"
-            >
-              🔑 Google o Email OTP
-            </button>
-            <button
-              type="button"
-              onClick={() => login({ provider: "google" })}
-              disabled={configStatus === "loading"}
-              className="w-full py-2.5 px-3 rounded-xl bg-[#182822] hover:bg-oro/20 border border-oro/60 text-brillo font-extrabold text-xs uppercase tracking-wide transition disabled:opacity-60"
-            >
-              G Continuar con Google
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs space-y-0.5">
-              <p className="font-bold text-brote">
-                {isProvisioning
-                  ? "⏳ Aprovisionando cuenta G... y trustline USDC Testnet..."
-                  : provisioningState === "READY"
-                  ? "✅ Billetera Stellar Testnet READY"
-                  : "⏳ Verificando estado en Stellar Testnet..."}
-              </p>
-              {effectiveAddress && (
-                <p className="font-mono text-arena/90">
-                  Cuenta: <strong>{shortAddress}</strong>
-                  {syncResult?.trustlineReady ? " · USDC habilitado" : ""}
-                </p>
-              )}
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              {effectiveAddress && (
-                <button
-                  type="button"
-                  onClick={handleCopyAddress}
-                  className="px-2.5 py-1.5 rounded-lg bg-bosque border border-oro/40 text-brillo text-[11px] font-bold"
-                >
-                  {copied ? "✓ Copiado" : "Copiar"}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => logout()}
-                className="px-2.5 py-1.5 rounded-lg bg-red-500/15 border border-red-400/40 text-red-200 text-[11px] font-bold"
-              >
-                Salir
-              </button>
-            </div>
-          </div>
-        </div>
+      {!onOpenRecharge && (
+        <BankQrRechargeModal
+          open={isRechargeModalOpen}
+          role={modalRole}
+          userId={userId}
+          purpose={rechargePurpose}
+          amountBs={rechargeAmountBs}
+          subtitle={
+            rechargeSubtitle ||
+            "Recarga saldo en Bolivianos (Bs) escaneando el QR desde la app de tu banco."
+          }
+          onRampCredited={(event) => {
+            setIsRechargeModalOpen(false);
+            setLocalError(null);
+            if (onRampCredited) {
+              onRampCredited(event);
+            } else {
+              setLocalFeedback(
+                translateBackendMessage(event.message) ||
+                  `¡Listo! Sumamos ${formatBs(
+                    event.creditedBs
+                  )} a tu libreta comunitaria.`
+              );
+            }
+          }}
+          onRampPending={(pending) => {
+            if (onRampPending) {
+              onRampPending(pending);
+            } else {
+              setLocalFeedback(COMMUNITY_COPY.rechargePendingNotice);
+            }
+          }}
+          onRampError={(errMsg) => {
+            const safeMsg = sanitizeUserError(errMsg);
+            if (onRampError) {
+              onRampError(safeMsg);
+            } else {
+              setLocalError(safeMsg);
+            }
+          }}
+          onClose={() => setIsRechargeModalOpen(false)}
+        />
       )}
-    </div>
+    </>
   );
 }

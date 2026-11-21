@@ -2,9 +2,34 @@ import { NextRequest, NextResponse } from "next/server";
 import { readSession } from "@/app/lib/session";
 import { db } from "@/app/lib/store";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const products = await db.getProducts();
+    const { searchParams } = new URL(request.url);
+    const includeClosed = searchParams.get("includeClosed") === "true";
+    if (includeClosed) {
+      const session = readSession(request);
+      if (!session.merchantId) {
+        return NextResponse.json(
+          {
+            error:
+              "Debes iniciar sesión como caserita para ver los productos de tu puesto.",
+            products: [],
+            total: 0,
+          },
+          { status: 401 }
+        );
+      }
+      const products = await db.getProducts({
+        includeClosed: true,
+        merchantId: session.merchantId,
+      });
+      return NextResponse.json({
+        products,
+        total: products.length,
+      });
+    }
+
+    const products = await db.getProducts({ includeClosed: false });
     return NextResponse.json({
       products,
       total: products.length,
@@ -59,7 +84,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: result.error }, { status: 401 });
     }
 
-    const products = await db.getProducts();
+    const products = await db.getProducts({
+      includeClosed: true,
+      merchantId: session.merchantId,
+    });
     return NextResponse.json(
       {
         product: result.product,
@@ -106,7 +134,10 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: result.error }, { status: 403 });
     }
 
-    const products = await db.getProducts();
+    const products = await db.getProducts({
+      includeClosed: true,
+      merchantId: session.merchantId,
+    });
     return NextResponse.json({
       products,
     });
@@ -143,7 +174,10 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: result.error }, { status: 403 });
     }
 
-    const products = await db.getProducts();
+    const products = await db.getProducts({
+      includeClosed: true,
+      merchantId: session.merchantId,
+    });
     return NextResponse.json({
       products,
     });

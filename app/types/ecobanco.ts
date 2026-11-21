@@ -40,6 +40,7 @@ export interface Product {
   sellerSchedule?: string;
   sellerDescription?: string;
   sellerFreeDeliveries?: number;
+  sellerIsOpen?: boolean;
   category?: "Gastronomía" | "Panadería" | "Servicios" | "Agroecología";
   priceMotes: number;
   imageUrl: string;
@@ -64,6 +65,8 @@ export interface EscrowTransaction {
   orderId?: string;
   productId: string;
   productName: string;
+  quantity?: number;
+  specialNotes?: string;
   sellerId?: string | null;
   sellerName: string;
   buyerId?: string | null;
@@ -90,6 +93,8 @@ export interface Order {
   release_tx_hash?: string | null;
   product_id: string | null;
   product_name: string;
+  quantity?: number;
+  special_notes?: string | null;
   seller_id: string | null;
   seller_name: string;
   buyer_id: string | null;
@@ -121,6 +126,8 @@ export interface Delivery {
   fund_tx_hash?: string | null;
   release_tx_hash?: string | null;
   product_name?: string;
+  quantity?: number;
+  special_notes?: string | null;
   amount_motes?: number;
   buyer_name?: string;
   delivery_address?: string;
@@ -154,6 +161,7 @@ export interface User {
   bankQrUrl?: string;
   email?: string;
   isLoggedIn: boolean;
+  isOpen?: boolean;
   isProsumer: boolean;
   isPremium?: boolean;
   fiatWalletEnabled?: boolean;
