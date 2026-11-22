@@ -36,6 +36,9 @@ export function getHorizonTestnetUrl(): string {
 export const STELLAR_TESTNET_USDC_ISSUER =
   "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 
+export const DEFAULT_TRUSTLESS_WORK_PLATFORM_ADDRESS =
+  "GCLCCT5Y3Y5P7YEH3IWJUTA4ZOBCM323HC6JTOWPMI5FDU7OHHJHCHRA";
+
 export const TRUSTLESS_WORK_FEE_RATE = 0.003; // 0.3% comisión de Trustless Work
 export const TRUSTLESS_WORK_NET_FACTOR = 1 - TRUSTLESS_WORK_FEE_RATE; // 0.997
 
@@ -102,6 +105,7 @@ interface TrustlessWorkConfigEnv {
   treasuryPublic: string;
   treasurySecret: string;
   treasuryKeypair: StellarSdk.Keypair;
+  platformAddress: string;
 }
 
 function getTrustlessWorkEnv(): TrustlessWorkConfigEnv {
@@ -145,17 +149,31 @@ function getTrustlessWorkEnv(): TrustlessWorkConfigEnv {
     });
   }
 
+  const rawPlatformAddress = process.env.TRUSTLESS_WORK_PLATFORM_ADDRESS;
+  const configuredPlatformAddress =
+    rawPlatformAddress !== undefined
+      ? rawPlatformAddress.trim()
+      : DEFAULT_TRUSTLESS_WORK_PLATFORM_ADDRESS;
+  const platformAddress = isClassicStellarGAddress(configuredPlatformAddress)
+    ? configuredPlatformAddress
+    : derivedPublic;
+
   return {
     apiUrl,
     apiKey,
     treasuryPublic: derivedPublic,
     treasurySecret,
     treasuryKeypair,
+    platformAddress,
   };
 }
 
 export function getTreasuryPublicAddress(): string {
   return getTrustlessWorkEnv().treasuryPublic;
+}
+
+export function getConfiguredPlatformAddress(): string {
+  return getTrustlessWorkEnv().platformAddress;
 }
 
 /**
@@ -493,7 +511,7 @@ async function prepareMultiReleaseDeploymentUnlocked(
   sellerServiceProvider: string;
   riderServiceProvider: string;
 }> {
-  const { treasuryPublic } = getTrustlessWorkEnv();
+  const { treasuryPublic, platformAddress } = getTrustlessWorkEnv();
 
   const milestone1GrossAmount = grossUpForTrustlessWork(
     input.productNetAmountMotes
@@ -507,10 +525,25 @@ async function prepareMultiReleaseDeploymentUnlocked(
 
   await ensureTreasuryReadyUnlocked(Math.max(50, totalFundedAmount + 10));
 
-  const [sellerServiceProvider, riderServiceProvider] = await Promise.all([
-    resolveOperationalStellarAddress(input.sellerStellarAddress),
-    resolveOperationalStellarAddress(input.riderStellarAddress),
-  ]);
+  const [sellerServiceProvider, riderServiceProvider, resolvedPlatformAddress] =
+    await Promise.all([
+      resolveOperationalStellarAddress(input.sellerStellarAddress),
+      resolveOperationalStellarAddress(input.riderStellarAddress),
+      resolveOperationalStellarAddress(platformAddress),
+    ]);
+
+  if (
+    isClassicStellarGAddress(platformAddress) &&
+    platformAddress !== treasuryPublic &&
+    resolvedPlatformAddress !== platformAddress
+  ) {
+    console.warn("[EcoBanco Testnet Audit][PLATFORM_ADDRESS_FALLBACK]", {
+      configuredPlatformAddress: platformAddress,
+      fallbackUsed: resolvedPlatformAddress,
+      reason:
+        "La cuenta platformAddress aún no existe en Stellar Testnet o no tiene trustline USDC activo.",
+    });
+  }
 
   const payload: InitializeMultiReleaseEscrowPayload = {
     signer: treasuryPublic,
@@ -525,7 +558,7 @@ async function prepareMultiReleaseDeploymentUnlocked(
     roles: {
       approver: treasuryPublic,
       serviceProvider: treasuryPublic,
-      platformAddress: treasuryPublic,
+      platformAddress: resolvedPlatformAddress,
       releaseSigner: treasuryPublic,
       disputeResolver: treasuryPublic,
     },
@@ -662,6 +695,7 @@ export async function deployAndFundMultiReleaseOrder(
       contractId,
       engagementId: input.engagementId,
       deployTxHash: deploySend.txHash,
+      platformAddress: prepared.payload.roles.platformAddress,
     });
 
     const funded = await fundMultiReleaseEscrowUnlocked({

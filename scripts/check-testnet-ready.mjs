@@ -78,6 +78,10 @@ function checkEnvConfiguration() {
     .replace(/\/+$/, "");
   const treasuryPublic = (process.env.STELLAR_TREASURY_PUBLIC || "").trim();
   const treasurySecret = (process.env.STELLAR_TREASURY_SECRET || "").trim();
+  const twPlatformAddress = (
+    process.env.TRUSTLESS_WORK_PLATFORM_ADDRESS ||
+    "GCLCCT5Y3Y5P7YEH3IWJUTA4ZOBCM323HC6JTOWPMI5FDU7OHHJHCHRA"
+  ).trim();
 
   if (!supabaseUrl || !supabaseKey || supabaseKey.startsWith("tu_")) {
     addCheck(
@@ -187,6 +191,7 @@ function checkEnvConfiguration() {
       .replace(/\/+$/, ""),
     twUrl,
     twKey,
+    twPlatformAddress,
     horizonUrl,
     treasuryPublic: derivedPublic || treasuryPublic,
   };
@@ -521,6 +526,53 @@ async function checkTrustlessWorkTestnet(env) {
       "TrustlessWork:TestnetAPI",
       `Error conectando a Trustless Work (${err instanceof Error ? err.message : "error"}).`
     );
+  }
+
+  if (env.twPlatformAddress && env.twPlatformAddress !== env.treasuryPublic) {
+    try {
+      const acctRes = await fetchWithTimeout(
+        `${env.horizonUrl}/accounts/${encodeURIComponent(env.twPlatformAddress)}`
+      );
+      if (acctRes.status === 404) {
+        addCheck(
+          "WARN",
+          "TrustlessWork:PlatformAddress",
+          `La cuenta platformAddress (${env.twPlatformAddress}) aún no existe en Stellar Testnet. Fondea con Friendbot (https://friendbot.stellar.org/?addr=${env.twPlatformAddress}) y activa la trustline USDC (${USDC_TESTNET_ISSUER}) para ver los nuevos escrows en tu Dashboard; mientras tanto se usa fallback seguro a la Tesorería.`
+        );
+      } else if (!acctRes.ok) {
+        addCheck(
+          "WARN",
+          "TrustlessWork:PlatformAddress",
+          `No se pudo verificar platformAddress (${env.twPlatformAddress}) en Horizon Testnet (HTTP ${acctRes.status}); se usará fallback seguro a Tesorería si es necesario.`
+        );
+      } else {
+        const acct = await acctRes.json();
+        const balances = Array.isArray(acct.balances) ? acct.balances : [];
+        const hasUsdcTrustline = balances.some(
+          (b) =>
+            b.asset_code === "USDC" && b.asset_issuer === USDC_TESTNET_ISSUER
+        );
+        if (!hasUsdcTrustline) {
+          addCheck(
+            "WARN",
+            "TrustlessWork:PlatformAddress",
+            `La cuenta platformAddress (${env.twPlatformAddress}) existe en Testnet pero falta activar su trustline USDC (${USDC_TESTNET_ISSUER}) para aparecer en Trustless Work Dashboard; mientras tanto se usa fallback seguro a la Tesorería.`
+          );
+        } else {
+          addCheck(
+            "PASS",
+            "TrustlessWork:PlatformAddress",
+            `Cuenta platformAddress (${env.twPlatformAddress}) activa en Testnet con trustline USDC lista para nuevos escrows.`
+          );
+        }
+      }
+    } catch (err) {
+      addCheck(
+        "WARN",
+        "TrustlessWork:PlatformAddress",
+        `Error verificando platformAddress (${env.twPlatformAddress}) en Horizon Testnet (${err instanceof Error ? err.message : "error"}).`
+      );
+    }
   }
 }
 

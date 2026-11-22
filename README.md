@@ -43,6 +43,27 @@ Con **comisión 0 Bs para el barrio**, **recargas por QR bancario boliviano**, *
 
 ---
 
+## 🧪 Cuentas Demo Activas (Acceso para Jurados)
+
+Las siguientes cuentas están **activas y listas para probar** el flujo completo entre Vecino, Caserita y Eco-Rider sin necesidad de crear cuentas nuevas desde cero:
+
+| Rol | Ruta de acceso | Nombre / Puesto | Teléfono WhatsApp o Credencial | Clave / PIN de ingreso | Notas de prueba |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Vecino (Comprador)** | `/perfil-usuario` o `/marketplace` | `Rony Canaviri` | `63039279` (`+59163039279`) | *Sin contraseña* | Acceso rápido con **Nombre** + **WhatsApp de 8 dígitos** (dirección guardada: *Casa Cultural Trono*). |
+| **Caserita principal** | `/panel-caserita` | `Doña Eliana` (*Eliana Rivero Espinoza*) | `73540555` | `2710` | Puesto activo en *Mercado Villa Exaltación - Puesto 28* con catálogo publicado y modo Aliada habilitado. |
+| **Caserita secundaria** | `/panel-caserita` | `Postres Contentos` (*Daniel Rene Cabrera*) | `64065089` | `2502` | Cuenta adicional de comerciante lista para publicar productos o probar multi-puesto. |
+| **Eco-Rider verificado** | `/panel-rider` | `Oliver Lujan` (*bicicleta*) | `78757485` o `ECO-R-7046` | `2502` | Repartidor ya verificado y habilitado para aceptar pedidos, validar PIN de recojo y confirmar entrega. |
+
+> [!TIP]
+> **Flujo recomendado de evaluación end-to-end (3 minutos):**
+> 1. **Vecino (`/perfil-usuario`):** Ingresa con `Rony Canaviri` y WhatsApp `63039279` (sin clave). Si su saldo está en `0 Bs`, usa **Recargar con QR** para acreditar saldo de prueba en su Libreta Comunitaria.
+> 2. **Compra con Pago Protegido (`/marketplace`):** Elige un producto de **Doña Eliana**, confirma el pedido y guarda el **código secreto de entrega de 4 dígitos** que recibe el Vecino.
+> 3. **Caserita (`/panel-caserita`):** Inicia sesión con `Doña Eliana` (o `73540555`) y PIN `2710`. En **Mis Pedidos**, verifica la orden garantizada y su **código secreto de recojo de 4 dígitos**.
+> 4. **Eco-Rider (`/panel-rider`):** Ingresa con `78757485` (o `ECO-R-7046`) y PIN `2502`. Toma el pedido en **Disponibles**, confirma el recojo en **En Curso** con el código de la caserita y luego valida la entrega con el código del vecino.
+> 5. **Liquidación inmediata:** Al instante, el pago del producto se acredita a **Doña Eliana** y los **5 Bs** del envío se suman a **Oliver Lujan** (también puedes liberar el pago directamente desde la Libreta del Vecino).
+
+---
+
 ## ❓ Preguntas Frecuentes (FAQ)
 
 ### 1. ¿Qué es EcoBanco Bolivia y cuánto cuesta usarlo?
@@ -97,6 +118,7 @@ Esta sección está dirigida exclusivamente al equipo técnico de despliegue y a
 - **Base de Datos y Storage**: Supabase PostgreSQL (API REST v1 via Service Role en servidor) + 4 buckets públicos de Storage (`avatars`, `product-images`, `qr-bancarios`, `rider-verifications`).
 - **Billetera Embebida y On-Ramp QR (Testnet)**: `@pollar/core` y `@pollar/react` configurados estrictamente en `stellarNetwork: "testnet"` (`app/providers/PollarAppProvider.tsx`, `app/lib/pollarWallet.ts`).
 - **Escrow Multi-Release (Soroban Testnet)**: `@trustless-work/escrow` (`dev.api.trustlesswork.com`) y `@stellar/stellar-sdk` sobre `https://horizon-testnet.stellar.org` (`app/lib/trustlessWork.ts`). Crea, fondea desde Tesorería/cuenta, registra evidencia del hito `"0"` (recojo) y aprueba/libera ambos hitos (caserita + repartidor) en Testnet.
+  - Si se configura `TRUSTLESS_WORK_PLATFORM_ADDRESS` (por defecto `GCLCCT5Y3Y5P7YEH3IWJUTA4ZOBCM323HC6JTOWPMI5FDU7OHHJHCHRA`), los nuevos escrows la asignan en `roles.platformAddress` para reflejar los movimientos en ese Dashboard. Dicha cuenta debe estar inicializada en Stellar Testnet y contar con trustline `USDC` (`GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5`); si aún no cumple ese requisito, `resolveOperationalStellarAddress()` hace fallback automático y seguro a `STELLAR_TREASURY_PUBLIC`.
 
 ### Configuración inicial del entorno
 
@@ -104,7 +126,7 @@ Esta sección está dirigida exclusivamente al equipo técnico de despliegue y a
    ```bash
    cp .env.example .env.local
    ```
-2. Completa todas las variables requeridas en `.env.local` (Supabase URL/keys, `STELLAR_TREASURY_PUBLIC`, `STELLAR_TREASURY_SECRET`, `NEXT_PUBLIC_POLLAR_PUBLISHABLE_KEY` con prefijo `pub_testnet_` y `TRUSTLESS_WORK_API_KEY`).
+2. Completa todas las variables requeridas en `.env.local` (Supabase URL/keys, `STELLAR_TREASURY_PUBLIC`, `STELLAR_TREASURY_SECRET`, `NEXT_PUBLIC_POLLAR_PUBLISHABLE_KEY` con prefijo `pub_testnet_`, `TRUSTLESS_WORK_API_KEY` y opcionalmente `TRUSTLESS_WORK_PLATFORM_ADDRESS`).
 3. En el panel de **Pollar** (Testnet), registra los **Allowed Origins** (`http://localhost:3000` y `https://<tu-dominio>`) y las **Redirect URIs** (`http://localhost:3000/auth/callback` y `https://<tu-dominio>/auth/callback`) para el acceso con Google.
 4. Ejecuta el archivo completo [`supabase/schema.sql`](supabase/schema.sql) en el **SQL Editor** de tu proyecto Supabase. El script es idempotente, crea y actualiza las 5 tablas base (`users`, `products`, `orders`, `deliveries`, `ramp_transactions`), configura los buckets de Storage y recarga el caché de PostgREST.
 
