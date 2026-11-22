@@ -134,7 +134,7 @@ export const ELIANA_SEED_ROW: SupabaseUserRow = {
   schedule: "",
   avatar_url: "",
   profile_completed: false,
-  phone: "73540555",
+  phone: "+59173540555",
   password: "73540555",
   bank_qr_url: "",
   email: null,

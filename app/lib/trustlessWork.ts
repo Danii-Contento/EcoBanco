@@ -256,11 +256,30 @@ export async function resolveOperationalStellarAddress(
   return hasUsdcTrustline ? clean : treasuryPublic;
 }
 
+const globalTreasuryQueue = globalThis as unknown as {
+  ecoBancoTreasuryQueue?: Promise<unknown>;
+};
+
+function enqueueTreasuryOperation<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = globalTreasuryQueue.ecoBancoTreasuryQueue ?? Promise.resolve();
+  const next = prev.then(
+    () => fn(),
+    () => fn()
+  );
+  globalTreasuryQueue.ecoBancoTreasuryQueue = next.catch(() => undefined);
+  return next;
+}
+
+function isTransientStellarOrTwError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err || "");
+  return /tx_bad_seq|(\b502\b)|(\b503\b)|(\b504\b)|(\b429\b)/i.test(msg);
+}
+
 /**
  * Garantiza que la Tesorería Operativa (STELLAR_TREASURY_PUBLIC) exista en Stellar Testnet,
  * tenga el trustline de USDC activo y cuente con saldo suficiente de USDC para fondear el contrato.
  */
-export async function ensureTreasuryReady(
+async function ensureTreasuryReadyUnlocked(
   minUsdcRequired = 50
 ): Promise<void> {
   const { treasuryPublic, treasuryKeypair } = getTrustlessWorkEnv();
@@ -327,6 +346,14 @@ export async function ensureTreasuryReady(
   await server.submitTransaction(tx);
 }
 
+export async function ensureTreasuryReady(
+  minUsdcRequired = 50
+): Promise<void> {
+  return enqueueTreasuryOperation(() =>
+    ensureTreasuryReadyUnlocked(minUsdcRequired)
+  );
+}
+
 async function trustlessWorkRequest<TResponse>(
   endpoint: string,
   options: {
@@ -335,40 +362,49 @@ async function trustlessWorkRequest<TResponse>(
   } = {}
 ): Promise<TResponse> {
   const { apiUrl, apiKey } = getTrustlessWorkEnv();
-  const res = await fetch(`${apiUrl}${endpoint}`, {
-    method: options.method || "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-    cache: "no-store",
-  });
-
-  const rawText = await res.text();
-  let parsed: unknown = null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    parsed = rawText ? JSON.parse(rawText) : {};
-  } catch {
-    parsed = { message: rawText };
-  }
+    const res = await fetch(`${apiUrl}${endpoint}`, {
+      method: options.method || "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
+      cache: "no-store",
+    });
 
-  if (!res.ok) {
-    const errObj = parsed as {
-      message?: string;
-      details?: unknown;
-      error?: string;
-    };
-    const detailStr = errObj?.details ? ` (${JSON.stringify(errObj.details)})` : "";
-    throw new Error(
-      `Trustless Work API ${endpoint} (${res.status}): ${
-        errObj?.message || errObj?.error || rawText
-      }${detailStr}`
-    );
-  }
+    const rawText = await res.text();
+    let parsed: unknown = null;
+    try {
+      parsed = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      parsed = { message: rawText };
+    }
 
-  return parsed as TResponse;
+    if (!res.ok) {
+      const errObj = parsed as {
+        message?: string;
+        details?: unknown;
+        error?: string;
+      };
+      const detailStr = errObj?.details
+        ? ` (${JSON.stringify(errObj.details)})`
+        : "";
+      throw new Error(
+        `Trustless Work API ${endpoint} (${res.status}): ${
+          errObj?.message || errObj?.error || rawText
+        }${detailStr}`
+      );
+    }
+
+    return parsed as TResponse;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export interface SendTxWithHashResponse extends SendTransactionResponse {
@@ -446,7 +482,7 @@ export interface DeployedAndFundedMultiReleaseOrder {
  *    - Hito 2 (Envío Ecológico EcoDohmi): receiver/serviceProvider = stellar_address del repartidor (o fallback a STELLAR_TREASURY_PUBLIC)
  * 2) Llama a POST /deployer/multi-release para obtener el unsignedTransaction XDR.
  */
-export async function prepareMultiReleaseDeployment(
+async function prepareMultiReleaseDeploymentUnlocked(
   input: DeployMultiReleaseOrderInput
 ): Promise<{
   payload: InitializeMultiReleaseEscrowPayload;
@@ -469,7 +505,7 @@ export async function prepareMultiReleaseDeployment(
     (milestone1GrossAmount + milestone2GrossAmount).toFixed(2)
   );
 
-  await ensureTreasuryReady(Math.max(50, totalFundedAmount + 10));
+  await ensureTreasuryReadyUnlocked(Math.max(50, totalFundedAmount + 10));
 
   const [sellerServiceProvider, riderServiceProvider] = await Promise.all([
     resolveOperationalStellarAddress(input.sellerStellarAddress),
@@ -536,10 +572,15 @@ export async function prepareMultiReleaseDeployment(
   };
 }
 
-/**
- * Fondea un contrato Multi-Release existente en Soroban Testnet con USDC.
- */
-export async function fundMultiReleaseEscrow(params: {
+export async function prepareMultiReleaseDeployment(
+  input: DeployMultiReleaseOrderInput
+) {
+  return enqueueTreasuryOperation(() =>
+    prepareMultiReleaseDeploymentUnlocked(input)
+  );
+}
+
+async function fundMultiReleaseEscrowUnlocked(params: {
   contractId: string;
   amount: number;
   preSignedFundXdr?: string | null;
@@ -583,57 +624,72 @@ export async function fundMultiReleaseEscrow(params: {
 }
 
 /**
+ * Fondea un contrato Multi-Release existente en Soroban Testnet con USDC.
+ */
+export async function fundMultiReleaseEscrow(params: {
+  contractId: string;
+  amount: number;
+  preSignedFundXdr?: string | null;
+}): Promise<{ fundTxHash: string; amount: number }> {
+  return enqueueTreasuryOperation(() => fundMultiReleaseEscrowUnlocked(params));
+}
+
+/**
  * Despliega y fondea un contrato Multi-Release real de 2 hitos en Soroban Testnet.
  */
 export async function deployAndFundMultiReleaseOrder(
   input: DeployMultiReleaseOrderInput
 ): Promise<DeployedAndFundedMultiReleaseOrder> {
-  const prepared = await prepareMultiReleaseDeployment(input);
+  const deployed = await enqueueTreasuryOperation(async () => {
+    const prepared = await prepareMultiReleaseDeploymentUnlocked(input);
 
-  const signedDeployXdr = input.preSignedDeployXdr?.trim()
-    ? input.preSignedDeployXdr.trim()
-    : signXdrWithTreasury(prepared.unsignedTransaction).signedXdr;
+    const signedDeployXdr = input.preSignedDeployXdr?.trim()
+      ? input.preSignedDeployXdr.trim()
+      : signXdrWithTreasury(prepared.unsignedTransaction).signedXdr;
 
-  const deploySend = await sendSignedTransactionToTrustlessWork(
-    signedDeployXdr
-  );
-
-  const contractId = (deploySend.contractId || "").trim();
-  if (!isValidSorobanContractId(contractId)) {
-    throw new Error(
-      `Trustless Work no devolvió un contractId Soroban válido (recibido: "${contractId}").`
+    const deploySend = await sendSignedTransactionToTrustlessWork(
+      signedDeployXdr
     );
-  }
 
-  console.info("[EcoBanco Testnet Audit][ESCROW_DEPLOYED]", {
-    contractId,
-    engagementId: input.engagementId,
-    deployTxHash: deploySend.txHash,
-  });
+    const contractId = (deploySend.contractId || "").trim();
+    if (!isValidSorobanContractId(contractId)) {
+      throw new Error(
+        `Trustless Work no devolvió un contractId Soroban válido (recibido: "${contractId}").`
+      );
+    }
 
-  const funded = await fundMultiReleaseEscrow({
-    contractId,
-    amount: prepared.totalFundedAmount,
+    console.info("[EcoBanco Testnet Audit][ESCROW_DEPLOYED]", {
+      contractId,
+      engagementId: input.engagementId,
+      deployTxHash: deploySend.txHash,
+    });
+
+    const funded = await fundMultiReleaseEscrowUnlocked({
+      contractId,
+      amount: prepared.totalFundedAmount,
+    });
+
+    return { prepared, deploySend, contractId, funded };
   });
 
   // Actualización no bloqueante del indexer de Trustless Work
   void trustlessWorkRequest("/indexer/update-from-txhash", {
     method: "PUT",
-    body: { txHash: funded.fundTxHash },
+    body: { txHash: deployed.funded.fundTxHash },
   }).catch(() => undefined);
 
   return {
-    contractId,
+    contractId: deployed.contractId,
     engagementId: input.engagementId,
-    deployTxHash: deploySend.txHash,
-    fundTxHash: funded.fundTxHash,
+    deployTxHash: deployed.deploySend.txHash,
+    fundTxHash: deployed.funded.fundTxHash,
     milestone1NetAmount: input.productNetAmountMotes,
-    milestone1GrossAmount: prepared.milestone1GrossAmount,
+    milestone1GrossAmount: deployed.prepared.milestone1GrossAmount,
     milestone2NetAmount: input.deliveryFeeNetAmountMotes,
-    milestone2GrossAmount: prepared.milestone2GrossAmount,
-    totalFundedAmount: prepared.totalFundedAmount,
-    sellerServiceProvider: prepared.sellerServiceProvider,
-    riderServiceProvider: prepared.riderServiceProvider,
+    milestone2GrossAmount: deployed.prepared.milestone2GrossAmount,
+    totalFundedAmount: deployed.prepared.totalFundedAmount,
+    sellerServiceProvider: deployed.prepared.sellerServiceProvider,
+    riderServiceProvider: deployed.prepared.riderServiceProvider,
     subsidizedDelivery: Boolean(input.subsidizedDelivery),
   };
 }
@@ -653,44 +709,80 @@ export async function recordPickupMilestoneEvidence(params: {
     return null;
   }
 
-  const { treasuryPublic } = getTrustlessWorkEnv();
-  const evidence = `Recojo EcoDohmi confirmado${
-    params.riderName ? ` por ${params.riderName}` : ""
-  }${params.orderId ? ` (Orden ${params.orderId})` : ""}`;
+  return enqueueTreasuryOperation(async () => {
+    const { treasuryPublic } = getTrustlessWorkEnv();
+    const evidence = `Recojo EcoDohmi confirmado${
+      params.riderName ? ` por ${params.riderName}` : ""
+    }${params.orderId ? ` (Orden ${params.orderId})` : ""}`;
 
-  const changePayload: ChangeMilestoneStatusPayload = {
-    contractId: cleanContractId,
-    milestoneIndex: "0",
-    newStatus: "InProgress",
-    newEvidence: evidence,
-    serviceProvider: treasuryPublic,
-  };
+    const changePayload: ChangeMilestoneStatusPayload = {
+      contractId: cleanContractId,
+      milestoneIndex: "0",
+      newStatus: "InProgress",
+      newEvidence: evidence,
+      serviceProvider: treasuryPublic,
+    };
 
-  const changeInit = await trustlessWorkRequest<EscrowRequestResponse>(
-    "/escrow/multi-release/change-milestone-status",
-    {
-      method: "POST",
-      body: changePayload,
+    const changeInit = await trustlessWorkRequest<EscrowRequestResponse>(
+      "/escrow/multi-release/change-milestone-status",
+      {
+        method: "POST",
+        body: changePayload,
+      }
+    );
+
+    if (!changeInit.unsignedTransaction) {
+      return null;
     }
-  );
 
-  if (!changeInit.unsignedTransaction) {
-    return null;
-  }
+    const signedChange = signXdrWithTreasury(changeInit.unsignedTransaction);
+    const sendRes = await sendSignedTransactionToTrustlessWork(
+      signedChange.signedXdr
+    );
 
-  const signedChange = signXdrWithTreasury(changeInit.unsignedTransaction);
-  const sendRes = await sendSignedTransactionToTrustlessWork(
-    signedChange.signedXdr
-  );
+    console.info("[EcoBanco Testnet Audit][MILESTONE_IN_PROGRESS_OK]", {
+      contractId: cleanContractId,
+      deliveryId: params.deliveryId ?? null,
+      orderId: params.orderId ?? null,
+      txHash: sendRes.txHash,
+    });
 
-  console.info("[EcoBanco Testnet Audit][MILESTONE_IN_PROGRESS_OK]", {
-    contractId: cleanContractId,
-    deliveryId: params.deliveryId ?? null,
-    orderId: params.orderId ?? null,
-    txHash: sendRes.txHash,
+    return { txHash: sendRes.txHash };
   });
+}
 
-  return { txHash: sendRes.txHash };
+async function executeSerializedEscrowStepWithRetry(
+  endpoint: string,
+  payload: unknown,
+  missingXdrMessage: string
+): Promise<SendTxWithHashResponse> {
+  return enqueueTreasuryOperation(async () => {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const initRes = await trustlessWorkRequest<EscrowRequestResponse>(
+          endpoint,
+          {
+            method: "POST",
+            body: payload,
+          }
+        );
+        if (!initRes.unsignedTransaction) {
+          throw new Error(missingXdrMessage);
+        }
+        const signed = signXdrWithTreasury(initRes.unsignedTransaction);
+        return await sendSignedTransactionToTrustlessWork(signed.signedXdr);
+      } catch (err) {
+        lastError = err;
+        if (attempt < 2 && isTransientStellarOrTwError(err)) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastError;
+  });
 }
 
 /**
@@ -715,21 +807,10 @@ export async function approveAndReleaseSingleMilestone(params: {
     newEvidence: params.evidence,
     serviceProvider: treasuryPublic,
   };
-  const changeInit = await trustlessWorkRequest<EscrowRequestResponse>(
+  const changeSend = await executeSerializedEscrowStepWithRetry(
     "/escrow/multi-release/change-milestone-status",
-    {
-      method: "POST",
-      body: changePayload,
-    }
-  );
-  if (!changeInit.unsignedTransaction) {
-    throw new Error(
-      `Trustless Work no devolvió unsignedTransaction en change-milestone-status para el hito ${params.milestoneIndex}.`
-    );
-  }
-  const signedChange = signXdrWithTreasury(changeInit.unsignedTransaction);
-  const changeSend = await sendSignedTransactionToTrustlessWork(
-    signedChange.signedXdr
+    changePayload,
+    `Trustless Work no devolvió unsignedTransaction en change-milestone-status para el hito ${params.milestoneIndex}.`
   );
 
   // 2. Approve milestone -> approved = true
@@ -738,21 +819,10 @@ export async function approveAndReleaseSingleMilestone(params: {
     milestoneIndex: params.milestoneIndex,
     approver: treasuryPublic,
   };
-  const approveInit = await trustlessWorkRequest<EscrowRequestResponse>(
+  const approveSend = await executeSerializedEscrowStepWithRetry(
     "/escrow/multi-release/approve-milestone",
-    {
-      method: "POST",
-      body: approvePayload,
-    }
-  );
-  if (!approveInit.unsignedTransaction) {
-    throw new Error(
-      `Trustless Work no devolvió unsignedTransaction en approve-milestone para el hito ${params.milestoneIndex}.`
-    );
-  }
-  const signedApprove = signXdrWithTreasury(approveInit.unsignedTransaction);
-  const approveSend = await sendSignedTransactionToTrustlessWork(
-    signedApprove.signedXdr
+    approvePayload,
+    `Trustless Work no devolvió unsignedTransaction en approve-milestone para el hito ${params.milestoneIndex}.`
   );
 
   // 3. Release milestone funds -> transfiere USDC al receiver del hito
@@ -761,21 +831,10 @@ export async function approveAndReleaseSingleMilestone(params: {
     milestoneIndex: params.milestoneIndex,
     releaseSigner: treasuryPublic,
   };
-  const releaseInit = await trustlessWorkRequest<EscrowRequestResponse>(
+  const releaseSend = await executeSerializedEscrowStepWithRetry(
     "/escrow/multi-release/release-milestone-funds",
-    {
-      method: "POST",
-      body: releasePayload,
-    }
-  );
-  if (!releaseInit.unsignedTransaction) {
-    throw new Error(
-      `Trustless Work no devolvió unsignedTransaction en release-milestone-funds para el hito ${params.milestoneIndex}.`
-    );
-  }
-  const signedRelease = signXdrWithTreasury(releaseInit.unsignedTransaction);
-  const releaseSend = await sendSignedTransactionToTrustlessWork(
-    signedRelease.signedXdr
+    releasePayload,
+    `Trustless Work no devolvió unsignedTransaction en release-milestone-funds para el hito ${params.milestoneIndex}.`
   );
 
   return {
@@ -889,59 +948,68 @@ export async function sendTestnetUsdcFromTreasury(params: {
     );
   }
 
-  const horizonUrl = getHorizonTestnetUrl();
-  await ensureTreasuryReady(Math.max(50, roundedAmount + 10));
-
-  const destAcct = await fetchHorizonAccount(cleanDestination);
-  const hasUsdcTrustline = Boolean(
-    destAcct?.balances?.some(
-      (b) =>
-        b.asset_code === "USDC" &&
-        b.asset_issuer === STELLAR_TESTNET_USDC_ISSUER
-    )
-  );
+  let hasUsdcTrustline = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const destAcct = await fetchHorizonAccount(cleanDestination);
+    hasUsdcTrustline = Boolean(
+      destAcct?.balances?.some(
+        (b) =>
+          b.asset_code === "USDC" &&
+          b.asset_issuer === STELLAR_TESTNET_USDC_ISSUER
+      )
+    );
+    if (hasUsdcTrustline) break;
+    if (attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    }
+  }
   if (!hasUsdcTrustline) {
     throw new Error(
       "La cuenta aún no tiene activo el respaldo USDC en Testnet. Reintenta en unos segundos."
     );
   }
 
-  const server = new StellarSdk.Horizon.Server(horizonUrl);
-  const horizonAccount = await server.loadAccount(treasuryPublic);
-  const usdcAsset = new StellarSdk.Asset("USDC", STELLAR_TESTNET_USDC_ISSUER);
+  const horizonUrl = getHorizonTestnetUrl();
+  return enqueueTreasuryOperation(async () => {
+    await ensureTreasuryReadyUnlocked(Math.max(50, roundedAmount + 10));
 
-  const txBuilder = new StellarSdk.TransactionBuilder(horizonAccount, {
-    fee: StellarSdk.BASE_FEE,
-    networkPassphrase: StellarSdk.Networks.TESTNET,
-  }).addOperation(
-    StellarSdk.Operation.payment({
+    const server = new StellarSdk.Horizon.Server(horizonUrl);
+    const horizonAccount = await server.loadAccount(treasuryPublic);
+    const usdcAsset = new StellarSdk.Asset("USDC", STELLAR_TESTNET_USDC_ISSUER);
+
+    const txBuilder = new StellarSdk.TransactionBuilder(horizonAccount, {
+      fee: StellarSdk.BASE_FEE,
+      networkPassphrase: StellarSdk.Networks.TESTNET,
+    }).addOperation(
+      StellarSdk.Operation.payment({
+        destination: cleanDestination,
+        asset: usdcAsset,
+        amount: roundedAmount.toFixed(2),
+      })
+    );
+
+    const cleanMemo = (params.memo || "").trim();
+    if (cleanMemo) {
+      txBuilder.addMemo(StellarSdk.Memo.text(cleanMemo.slice(0, 28)));
+    }
+
+    const tx = txBuilder.setTimeout(60).build();
+    tx.sign(treasuryKeypair);
+    const submitRes = await server.submitTransaction(tx);
+
+    console.info("[EcoBanco Testnet Audit][POLLAR_QR_FUND_OK]", {
+      txHash: submitRes.hash,
       destination: cleanDestination,
-      asset: usdcAsset,
-      amount: roundedAmount.toFixed(2),
-    })
-  );
+      amountUsdc: roundedAmount,
+    });
 
-  const cleanMemo = (params.memo || "").trim();
-  if (cleanMemo) {
-    txBuilder.addMemo(StellarSdk.Memo.text(cleanMemo.slice(0, 28)));
-  }
-
-  const tx = txBuilder.setTimeout(60).build();
-  tx.sign(treasuryKeypair);
-  const submitRes = await server.submitTransaction(tx);
-
-  console.info("[EcoBanco Testnet Audit][POLLAR_QR_FUND_OK]", {
-    txHash: submitRes.hash,
-    destination: cleanDestination,
-    amountUsdc: roundedAmount,
+    return {
+      txHash: submitRes.hash,
+      amountUsdc: roundedAmount,
+      destination: cleanDestination,
+      source: treasuryPublic,
+    };
   });
-
-  return {
-    txHash: submitRes.hash,
-    amountUsdc: roundedAmount,
-    destination: cleanDestination,
-    source: treasuryPublic,
-  };
 }
 
 /**

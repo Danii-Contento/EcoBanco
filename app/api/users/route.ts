@@ -25,7 +25,11 @@ export async function GET(request: NextRequest) {
         activeBuyerType: state.activeBuyerType,
       })
     );
-  } catch {
+  } catch (err) {
+    console.error(
+      "[EcoBanco Users API][GET]",
+      err instanceof Error ? err.message : "unknown_error"
+    );
     return applyNoStoreHeaders(
       NextResponse.json(
         { error: "No se pudieron cargar los usuarios desde Supabase." },
@@ -227,7 +231,8 @@ export async function POST(request: NextRequest) {
     if (action === "merchant_login") {
       const result = await db.loginMerchant(
         String(identifier || ""),
-        String(password || "")
+        String(password || ""),
+        phone ? String(phone) : undefined
       );
 
       if (!result.ok || !result.merchant) {
@@ -472,7 +477,10 @@ export async function POST(request: NextRequest) {
       if (!result.ok) {
         return applyNoStoreHeaders(
           NextResponse.json(
-            { error: result.error, duplicate: Boolean(result.duplicate) },
+            {
+              error: sanitizeUserError(result.error),
+              duplicate: Boolean(result.duplicate),
+            },
             { status: result.duplicate ? 409 : 400 }
           )
         );
@@ -482,10 +490,10 @@ export async function POST(request: NextRequest) {
       const creditedRounded = Math.round(result.creditedBs ?? Number(amountBs));
       const successMessage =
         resolvedPurpose === "prosumer_subscription"
-          ? `¡Club Vecino activado con orden Pollar ${result.pollarOrderId}! Se acreditaron +50 MOTES y 5 envíos ecológicos incluidos.`
+          ? "¡Club Vecino activado con éxito! Se acreditaron +50 MOTES y 5 envíos ecológicos incluidos."
           : resolvedPurpose === "merchant_premium"
-          ? `¡Caserita Aliada activada con orden Pollar ${result.pollarOrderId}! Tu cobro directo a QR bancario y 5 envíos ecológicos están listos.`
-          : `¡Recarga real de ${creditedRounded} Bs acreditada (Orden Pollar ${result.pollarOrderId})!`;
+          ? "¡Caserita Aliada activada con éxito! Tu cobro directo a QR bancario y 5 envíos ecológicos están listos."
+          : `¡Recarga de ${creditedRounded} Bs acreditada en tu libreta comunitaria!`;
 
       return applyNoStoreHeaders(
         NextResponse.json({
@@ -789,7 +797,11 @@ export async function POST(request: NextRequest) {
     return applyNoStoreHeaders(
       NextResponse.json({ error: "Acción no válida." }, { status: 400 })
     );
-  } catch {
+  } catch (err) {
+    console.error(
+      "[EcoBanco Users API][POST]",
+      err instanceof Error ? err.message : "unknown_error"
+    );
     return applyNoStoreHeaders(
       NextResponse.json(
         { error: "Error procesando la solicitud." },

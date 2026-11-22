@@ -54,6 +54,9 @@ export default function PanelRiderPage() {
   const [activeTab, setActiveTab] = useState<RiderTab>("disponibles");
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const disconnectPromiseRef = useRef<Promise<void> | null>(null);
+  const hasInitializedRef = useRef<boolean>(false);
+  const pollarLogoutRef = useRef(pollarLogout);
+  pollarLogoutRef.current = pollarLogout;
 
   // Campos de ingreso (Login Repartidor)
   const [loginIdentifier, setLoginIdentifier] = useState<string>("");
@@ -144,6 +147,9 @@ export default function PanelRiderPage() {
 
   // Exige verificación explícita de sesión; en recarga o entrada con ?login=1 va directo al login
   useEffect(() => {
+    if (hasInitializedRef.current) return;
+    hasInitializedRef.current = true;
+
     let active = true;
     async function init() {
       const forceLogin =
@@ -159,7 +165,7 @@ export default function PanelRiderPage() {
         }
         const disconnectTask = disconnectProfileSession(
           "rider_logout",
-          pollarLogout
+          pollarLogoutRef.current
         );
         disconnectPromiseRef.current = disconnectTask;
         await disconnectTask;
@@ -193,12 +199,7 @@ export default function PanelRiderPage() {
     return () => {
       active = false;
     };
-  }, [
-    loadProtectedRiderData,
-    pollarLogout,
-    resetToLoginState,
-    syncRiderFields,
-  ]);
+  }, [loadProtectedRiderData, resetToLoginState, syncRiderFields]);
 
   const isRiderVerified = Boolean(
     authStatus === "authenticated" && rider?.isLoggedIn && rider?.riderVerified

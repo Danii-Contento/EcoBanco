@@ -83,7 +83,19 @@ export function useDisconnectOnPageUnload(
   useEffect(() => {
     if (!active || typeof window === "undefined") return;
 
-    const sendDisconnectBeacon = () => {
+    const sendDisconnectBeacon = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        return;
+      }
+      if (
+        typeof document !== "undefined" &&
+        document.querySelector(
+          '[role="dialog"], .pollar-modal-card, .pollar-overlay'
+        )
+      ) {
+        return;
+      }
+
       purgeClientSessionStorage();
       try {
         const blob = new Blob([JSON.stringify({ action })], {

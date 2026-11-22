@@ -671,6 +671,10 @@ export function BankQrRechargeModal({
     setIsSubmittingTestnetQr(true);
     setTestnetSubmitError(null);
     try {
+      if (client.getWallet()?.provisioning !== "READY") {
+        await ensurePollarWalletProvisioned(client).catch(() => undefined);
+      }
+
       const res = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -701,7 +705,7 @@ export function BankQrRechargeModal({
           amountUsdc: roundedBs,
           memo:
             purpose === "merchant_premium" ? "CASERITA ALIADA" : "CLUB VECINO",
-          waitForBalanceMs: 2000,
+          waitForBalanceMs: 6000,
         }).catch(() => undefined);
       }
 

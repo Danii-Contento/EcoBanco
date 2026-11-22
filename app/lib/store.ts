@@ -57,6 +57,31 @@ const merchantOpenOverrides: Map<string, boolean> =
   globalRampStore.ecoBancoMerchantOpenOverrides ??
   (globalRampStore.ecoBancoMerchantOpenOverrides = new Map<string, boolean>());
 
+function resolveUnclaimedPollarIdentifiers(
+  users: SupabaseUserRow[],
+  currentUserId: string | null,
+  pollarUserId?: string | null,
+  stellarAddress?: string | null
+): { pollarUserId: string | null; stellarAddress: string | null } {
+  const cleanPollar = pollarUserId?.trim() || null;
+  const cleanStellar =
+    stellarAddress && STELLAR_CLASSIC_ACCOUNT_REGEX.test(stellarAddress.trim())
+      ? stellarAddress.trim()
+      : null;
+
+  const pollarTakenByOther =
+    cleanPollar &&
+    users.some((u) => u.id !== currentUserId && u.pollar_user_id === cleanPollar);
+  const stellarTakenByOther =
+    cleanStellar &&
+    users.some((u) => u.id !== currentUserId && u.stellar_address === cleanStellar);
+
+  return {
+    pollarUserId: pollarTakenByOther ? null : cleanPollar,
+    stellarAddress: stellarTakenByOther ? null : cleanStellar,
+  };
+}
+
 export function clearMerchantRuntimeCache(merchantId?: string): void {
   if (merchantId) {
     merchantOpenOverrides.delete(merchantId);
@@ -719,12 +744,6 @@ export class SupabaseEcoBancoRepository {
       };
     }
     const cleanPass = (password || "").trim() || cleanPhone;
-    const cleanPollarUserId = pollar?.pollarUserId?.trim() || null;
-    const cleanStellarAddress =
-      pollar?.stellarAddress &&
-      STELLAR_CLASSIC_ACCOUNT_REGEX.test(pollar.stellarAddress.trim())
-        ? pollar.stellarAddress.trim()
-        : null;
 
     const users = await supabaseTables.listUsers();
     const exists = users.find(
@@ -741,6 +760,15 @@ export class SupabaseEcoBancoRepository {
           "Ya existe una cuenta registrada con ese nombre de negocio o número de WhatsApp.",
       };
     }
+
+    const resolvedPollar = resolveUnclaimedPollarIdentifiers(
+      users,
+      null,
+      pollar?.pollarUserId,
+      pollar?.stellarAddress
+    );
+    const cleanPollarUserId = resolvedPollar.pollarUserId;
+    const cleanStellarAddress = resolvedPollar.stellarAddress;
 
     const newRow: SupabaseUserRow = {
       id: `mer-${Date.now()}`,
@@ -799,7 +827,8 @@ export class SupabaseEcoBancoRepository {
 
   public async loginMerchant(
     identifier: string,
-    password: string
+    password: string,
+    phone?: string
   ): Promise<{ ok: boolean; error?: string; merchant?: User }> {
     const normalize = (str: string) =>
       str
@@ -810,16 +839,23 @@ export class SupabaseEcoBancoRepository {
 
     const cleanId = normalize(identifier);
     const cleanPhoneId = identifier.replace(/\s+/g, "").trim();
+    const cleanPhoneParam = (phone || "").replace(/\s+/g, "").trim();
     const cleanPass = password.replace(/\s+/g, "").trim();
 
     const users = await supabaseTables.listUsers();
-    const found = users.find(
-      (u) =>
-        u.role === "merchant" &&
-        (normalize(u.store_name || "") === cleanId ||
-          normalize(u.name) === cleanId ||
-          areSameBolivianPhone(u.phone, cleanPhoneId))
-    );
+    const merchants = users.filter((u) => u.role === "merchant");
+    const found =
+      (cleanPhoneParam
+        ? merchants.find((u) =>
+            areSameBolivianPhone(u.phone, cleanPhoneParam)
+          )
+        : undefined) ||
+      merchants.find(
+        (u) =>
+          (cleanId && normalize(u.store_name || "") === cleanId) ||
+          (cleanId && normalize(u.name) === cleanId) ||
+          (cleanPhoneId && areSameBolivianPhone(u.phone, cleanPhoneId))
+      );
 
     if (!found) {
       return {
@@ -1094,12 +1130,6 @@ export class SupabaseEcoBancoRepository {
     const cleanPhone = normalizeBolivianPhone(input.phone);
     const cleanAddress = (input.deliveryAddress || "").trim();
     const cleanReferralCode = (input.referralCode || "").trim().toUpperCase();
-    const cleanPollarUserId = input.pollarUserId?.trim() || null;
-    const cleanStellarAddress =
-      input.stellarAddress &&
-      STELLAR_CLASSIC_ACCOUNT_REGEX.test(input.stellarAddress.trim())
-        ? input.stellarAddress.trim()
-        : null;
 
     if (!cleanName || !input.phone?.trim()) {
       return {
@@ -1142,6 +1172,15 @@ export class SupabaseEcoBancoRepository {
           "Ese número de WhatsApp ya está registrado en una cuenta de caserita o repartidor. Usa otro número para pedir como vecino.",
       };
     }
+
+    const resolvedPollar = resolveUnclaimedPollarIdentifiers(
+      users,
+      existingBuyer?.id ?? null,
+      input.pollarUserId,
+      input.stellarAddress
+    );
+    const cleanPollarUserId = resolvedPollar.pollarUserId;
+    const cleanStellarAddress = resolvedPollar.stellarAddress;
 
     if (existingBuyer) {
       const isProsumer = Boolean(
@@ -1952,7 +1991,7 @@ export class SupabaseEcoBancoRepository {
     if (currentFiat < SUBSCRIPTION_COST) {
       return {
         ok: false,
-        error: `Saldo insuficiente (${SUBSCRIPTION_COST} Bs). Realiza tu recarga con QR a través de Pollar para activar el Club Vecino (Prosumidor).`,
+        error: `Saldo insuficiente (${SUBSCRIPTION_COST} Bs). Realiza tu recarga con QR de tu banco para activar el Club Vecino.`,
         buyer: mapUserRow(activeBuyer, orders, deliveries, users, true),
       };
     }
@@ -2671,12 +2710,6 @@ export class SupabaseEcoBancoRepository {
     const cleanPin = (input.password || "").replace(/\D/g, "").slice(0, 4);
     const cleanSelfie = (input.selfieUrl || "").trim();
     const cleanCiPhoto = (input.ciPhotoUrl || "").trim();
-    const cleanPollarUserId = input.pollarUserId?.trim() || null;
-    const cleanStellarAddress =
-      input.stellarAddress &&
-      STELLAR_CLASSIC_ACCOUNT_REGEX.test(input.stellarAddress.trim())
-        ? input.stellarAddress.trim()
-        : null;
 
     if (
       !cleanName ||
@@ -2732,6 +2765,15 @@ export class SupabaseEcoBancoRepository {
           "Ya existe un repartidor registrado con ese número de WhatsApp. Ingresa desde la pestaña Ingresar.",
       };
     }
+
+    const resolvedPollar = resolveUnclaimedPollarIdentifiers(
+      users,
+      null,
+      input.pollarUserId,
+      input.stellarAddress
+    );
+    const cleanPollarUserId = resolvedPollar.pollarUserId;
+    const cleanStellarAddress = resolvedPollar.stellarAddress;
 
     const riderId = `rid-${Date.now()}`;
 
@@ -3414,12 +3456,18 @@ export class SupabaseEcoBancoRepository {
       return { ok: false };
     }
 
+    const resolvedPollar = resolveUnclaimedPollarIdentifiers(
+      users,
+      matched.id,
+      cleanPollarUserId,
+      cleanStellarAddress
+    );
     const patch: Partial<SupabaseUserRow> = {};
-    if (cleanPollarUserId && !matched.pollar_user_id) {
-      patch.pollar_user_id = cleanPollarUserId;
+    if (resolvedPollar.pollarUserId && !matched.pollar_user_id) {
+      patch.pollar_user_id = resolvedPollar.pollarUserId;
     }
-    if (cleanStellarAddress && !matched.stellar_address) {
-      patch.stellar_address = cleanStellarAddress;
+    if (resolvedPollar.stellarAddress && !matched.stellar_address) {
+      patch.stellar_address = resolvedPollar.stellarAddress;
     }
     if (Object.keys(patch).length > 0) {
       const updated = await supabaseTables.updateUser(matched.id, patch);

@@ -466,10 +466,16 @@ export async function payWithPollarWallet(
 
   try {
     let availableUsdc = await readStellarUsdcAvailable(client);
-    const waitMs = Math.min(2000, Math.max(0, Number(params.waitForBalanceMs ?? 0)));
-    if (availableUsdc < roundedAmount && waitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-      availableUsdc = await readStellarUsdcAvailable(client);
+    const maxWaitMs = Math.min(6000, Math.max(0, Number(params.waitForBalanceMs ?? 0)));
+    if (availableUsdc < roundedAmount && maxWaitMs > 0) {
+      const deadline = Date.now() + maxWaitMs;
+      for (let attempt = 0; attempt < 4 && availableUsdc < roundedAmount; attempt++) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        const pauseMs = Math.min(1500, remaining);
+        await new Promise((resolve) => setTimeout(resolve, pauseMs));
+        availableUsdc = await readStellarUsdcAvailable(client);
+      }
     }
 
     if (availableUsdc < roundedAmount) {

@@ -468,6 +468,13 @@ export function sanitizeUserError(rawError: unknown): string {
     return COMMUNITY_COPY.rechargePendingNotice;
   }
 
+  if (
+    lower.includes("ya está vinculada a otra cuenta") ||
+    lower.includes("no coincide con la cuenta vinculada")
+  ) {
+    return "Ese correo de Google ya está asociado a otra cuenta de EcoBanco. Usa otro correo para esta cuenta o entra a la cuenta donde ya lo vinculaste.";
+  }
+
   // 4. Mensajes humanos de negocio que sí deben orientar al usuario (sanitizados)
   if (lower.includes("saldo insuficiente")) {
     const cleaned = translateBackendMessage(raw);

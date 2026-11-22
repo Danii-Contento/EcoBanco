@@ -303,7 +303,7 @@ export default function MarketplacePage() {
                 destination: cfgData.operationalAccount,
                 amountUsdc: totalOrderBs,
                 memo: "ECOBANCO PEDIDO",
-                waitForBalanceMs: paymentMethod === "fiat" ? 1800 : 0,
+                waitForBalanceMs: paymentMethod === "fiat" ? 4500 : 0,
               });
               if (pollarPay.paid && pollarPay.txHash) {
                 pollarPaymentTxHash = pollarPay.txHash;

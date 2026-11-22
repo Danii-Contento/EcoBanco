@@ -57,6 +57,9 @@ export default function PanelCaseritaPage() {
   const [isCheckingPendingRamp, setIsCheckingPendingRamp] =
     useState<boolean>(false);
   const disconnectPromiseRef = useRef<Promise<void> | null>(null);
+  const hasInitializedRef = useRef<boolean>(false);
+  const pollarLogoutRef = useRef(pollarLogout);
+  pollarLogoutRef.current = pollarLogout;
   const [products, setProducts] = useState<Product[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -195,6 +198,9 @@ export default function PanelCaseritaPage() {
 
   // Exige verificación explícita de sesión; en recarga o entrada con ?login=1 va directo al login
   useEffect(() => {
+    if (hasInitializedRef.current) return;
+    hasInitializedRef.current = true;
+
     let active = true;
     async function init() {
       const forceLogin =
@@ -210,7 +216,7 @@ export default function PanelCaseritaPage() {
         }
         const disconnectTask = disconnectProfileSession(
           "merchant_logout",
-          pollarLogout
+          pollarLogoutRef.current
         );
         disconnectPromiseRef.current = disconnectTask;
         await disconnectTask;
@@ -243,12 +249,7 @@ export default function PanelCaseritaPage() {
     return () => {
       active = false;
     };
-  }, [
-    loadProtectedMerchantData,
-    pollarLogout,
-    resetToLoginState,
-    syncConfigFields,
-  ]);
+  }, [loadProtectedMerchantData, resetToLoginState, syncConfigFields]);
 
   useDisconnectOnPageUnload(
     authStatus === "authenticated" && Boolean(merchant?.isLoggedIn),
@@ -507,8 +508,8 @@ export default function PanelCaseritaPage() {
     const cleanPhone = loginPhone.replace(/\s+/g, "").trim();
     const cleanPin = loginPin.replace(/\D/g, "").slice(0, 4);
 
-    if (!cleanId) {
-      setAuthError("Escribe tu nombre o el nombre de tu puesto.");
+    if (!cleanId && !cleanPhone) {
+      setAuthError("Escribe tu nombre, negocio o número de WhatsApp.");
       return;
     }
 
@@ -518,6 +519,9 @@ export default function PanelCaseritaPage() {
       );
       return;
     }
+
+    const effectiveIdentifier = cleanId || cleanPhone;
+    const phoneParam = cleanPhone || undefined;
 
     setIsSubmittingAuth(true);
     setAuthBusyText("Abriendo tu puesto...");
@@ -550,7 +554,8 @@ export default function PanelCaseritaPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             action: "merchant_login",
-            identifier: cleanId,
+            identifier: effectiveIdentifier,
+            phone: phoneParam,
             password: cleanPin,
           }),
         });
@@ -567,7 +572,8 @@ export default function PanelCaseritaPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               action: "merchant_login",
-              identifier: cleanId,
+              identifier: effectiveIdentifier,
+              phone: phoneParam,
               password: cleanPhone,
             }),
           });
@@ -607,7 +613,8 @@ export default function PanelCaseritaPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "merchant_login",
-          identifier: cleanId,
+          identifier: effectiveIdentifier,
+          phone: phoneParam,
           password: cleanPhone,
         }),
       });
@@ -1045,14 +1052,13 @@ export default function PanelCaseritaPage() {
               <form onSubmit={handleMerchantLogin} className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold uppercase eco-text mb-1">
-                    Tu Nombre o Nombre de tu Puesto *
+                    Tu Nombre, Puesto o WhatsApp
                   </label>
                   <input
                     type="text"
-                    required
                     value={loginIdentifier}
                     onChange={(e) => setLoginIdentifier(e.target.value)}
-                    placeholder="Ej. Doña Eliana"
+                    placeholder="Ej. Doña Eliana o 73540555"
                     className="w-full px-4 py-3.5 min-h-[48px] rounded-xl eco-input text-base"
                   />
                 </div>
