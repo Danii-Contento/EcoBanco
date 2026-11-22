@@ -255,27 +255,30 @@ async function checkSupabase(env) {
       );
     } else {
       const buckets = await bucketRes.json();
-      const names = new Set(
-        Array.isArray(buckets) ? buckets.map((b) => b.id || b.name) : []
+      const bucketMap = new Map(
+        Array.isArray(buckets) ? buckets.map((b) => [b.id || b.name, b]) : []
       );
-      const expected = [
-        "avatars",
-        "product-images",
-        "qr-bancarios",
-        "rider-verifications",
-      ];
-      const missing = expected.filter((b) => !names.has(b));
+      const expectedPublic = ["avatars", "product-images", "qr-bancarios"];
+      const expectedAll = [...expectedPublic, "rider-verifications"];
+      const missing = expectedAll.filter((b) => !bucketMap.has(b));
+      const riderBucket = bucketMap.get("rider-verifications");
       if (missing.length > 0) {
         addCheck(
           "WARN",
           "Supabase:Storage",
           `Faltan buckets: ${missing.join(", ")}. Ejecuta supabase/schema.sql.`
         );
+      } else if (riderBucket && riderBucket.public === true) {
+        addCheck(
+          "FAIL",
+          "Supabase:Storage",
+          "El bucket 'rider-verifications' (CI/selfies) está marcado como PÚBLICO. Debe ser PRIVADO (public = false) y servirse solo vía createSignedUrl."
+        );
       } else {
         addCheck(
           "PASS",
           "Supabase:Storage",
-          `4/4 buckets públicos listos (${expected.join(", ")}).`
+          `Storage seguro: 3 buckets públicos (${expectedPublic.join(", ")}) + 1 bucket PRIVADO (rider-verifications con createSignedUrl).`
         );
       }
     }

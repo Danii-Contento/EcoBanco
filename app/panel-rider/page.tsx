@@ -269,11 +269,12 @@ export default function PanelRiderPage() {
         return;
       }
 
+      const previewUrl = data.signedUrl || data.publicUrl || "";
       if (kind === "selfie") {
-        setSelfieUrlInput(data.publicUrl);
+        setSelfieUrlInput(previewUrl);
         setSelfieKb(compressedSizeKb);
       } else {
-        setCiPhotoUrlInput(data.publicUrl);
+        setCiPhotoUrlInput(previewUrl);
         setCiKb(compressedSizeKb);
       }
     } catch (err) {
@@ -736,7 +737,7 @@ export default function PanelRiderPage() {
                     required
                     value={loginIdentifier}
                     onChange={(e) => setLoginIdentifier(e.target.value)}
-                    placeholder="Ej. 64065089 o ECO-R-1234"
+                    placeholder="Ej. 70000003 o ECO-R-DEMO"
                     className="w-full px-4 py-3.5 min-h-[48px] rounded-xl eco-input text-base"
                   />
                 </div>
@@ -783,7 +784,7 @@ export default function PanelRiderPage() {
                       required
                       value={nameInput}
                       onChange={(e) => setNameInput(e.target.value)}
-                      placeholder="Ej. Oliver Lujan"
+                      placeholder="Ej. Lucas Condori"
                       className="w-full px-4 py-3.5 min-h-[48px] rounded-xl eco-input text-base"
                     />
                   </div>
@@ -798,7 +799,7 @@ export default function PanelRiderPage() {
                         required
                         value={phoneInput}
                         onChange={(e) => setPhoneInput(e.target.value)}
-                        placeholder="Ej. 64065089"
+                        placeholder="Ej. 76543210"
                         className="w-full px-4 py-3.5 min-h-[48px] rounded-xl eco-input text-base"
                       />
                     </div>

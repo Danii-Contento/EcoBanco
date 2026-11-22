@@ -86,9 +86,10 @@ export default function MarketplacePage() {
   const [lastDelivery, setLastDelivery] = useState<Delivery | null>(null);
   const [lastSellerPhone, setLastSellerPhone] = useState<string | null>(null);
 
-  // Pago directo por QR bancario exacto
+  // Pago directo por QR bancario exacto y PIN autorizado del pedido
   const [qrCheckoutOpen, setQrCheckoutOpen] = useState<boolean>(false);
   const [qrPendingNotice, setQrPendingNotice] = useState<string | null>(null);
+  const [pendingBuyerPin, setPendingBuyerPin] = useState<string>("");
 
   useEffect(() => {
     async function fetchMarketplaceData() {
@@ -280,7 +281,8 @@ export default function MarketplacePage() {
     product: Product,
     quantity: number,
     specialNotes: string,
-    paymentMethod?: "fiat" | "motes"
+    paymentMethod?: "fiat" | "motes",
+    buyerPin?: string
   ) => {
     try {
       setIsProcessing(true);
@@ -315,6 +317,8 @@ export default function MarketplacePage() {
         }
       }
 
+      const resolvedPin = (buyerPin || pendingBuyerPin || "").trim();
+
       const res = await fetch("/api/escrow", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -324,6 +328,7 @@ export default function MarketplacePage() {
           paymentMethod,
           quantity,
           specialNotes: specialNotes.trim() || undefined,
+          buyerPin: resolvedPin || undefined,
           ...(pollarPaymentTxHash ? { pollarPaymentTxHash } : {}),
         }),
       });
@@ -341,6 +346,7 @@ export default function MarketplacePage() {
       setLastDelivery(data.delivery || null);
       setLastSellerPhone(product.sellerPhone || null);
       setPendingProduct(null);
+      setPendingBuyerPin("");
       setQrCheckoutOpen(false);
       setQrPendingNotice(null);
 
@@ -374,7 +380,8 @@ export default function MarketplacePage() {
         pendingProduct,
         orderQuantity,
         specialNotesInput,
-        "fiat"
+        "fiat",
+        pendingBuyerPin
       );
     }
   };
@@ -680,17 +687,20 @@ export default function MarketplacePage() {
         onQuantityChange={setOrderQuantity}
         onSpecialNotesChange={setSpecialNotesInput}
         onBuyerUpdated={handleBuyerUpdated}
-        onPayWithBalance={(method) => {
+        onPayWithBalance={(method, buyerPin) => {
+          setPendingBuyerPin(buyerPin);
           if (pendingProduct) {
             void executeProtectedPurchase(
               pendingProduct,
               orderQuantity,
               specialNotesInput,
-              method
+              method,
+              buyerPin
             );
           }
         }}
-        onPayWithBankQr={() => {
+        onPayWithBankQr={(buyerPin) => {
+          setPendingBuyerPin(buyerPin);
           setOrderError(null);
           setQrCheckoutOpen(true);
         }}

@@ -1,7 +1,7 @@
 -- ============================================================================
 -- EcoBanco Bolivia - Esquema Supabase Consolidado (100% Idempotente)
 -- Stellar Testnet · Multiusuario por cookie HttpOnly · Sin duplicados
--- Mantiene intacta la cuenta real de Doña Eliana (mer-eliana-01 / 73540555)
+-- Sin credenciales ni teléfonos de personas reales en el código público
 -- ============================================================================
 
 -- 1. TABLA: users
@@ -172,45 +172,72 @@ CREATE INDEX IF NOT EXISTS idx_deliveries_order_id ON public.deliveries(order_id
 CREATE INDEX IF NOT EXISTS idx_ramp_tx_user_id ON public.ramp_transactions(user_id);
 CREATE INDEX IF NOT EXISTS idx_ramp_tx_pollar_order_id ON public.ramp_transactions(pollar_order_id);
 
--- 6. SEED ÚNICO: Cuenta real de Doña Eliana (sin usuarios ni productos ficticios)
+-- 6. SEED DE CUENTAS DEMO FICTICIAS PARA EVALUACIÓN (SIN DATOS PERSONALES REALES)
 INSERT INTO public.users (
-  id, role, name, store_name, phone, password,
-  motes_enabled, referral_code
+  id, role, name, store_name, address, delivery_address, schedule,
+  profile_completed, phone, password, fiat_wallet_enabled, motes_enabled,
+  fiat_balance_bs, motes_balance, free_deliveries_remaining, referral_code,
+  rider_verified, rider_invite_code, ci_number
 )
-VALUES (
-  'mer-eliana-01', 'merchant', 'Eliana Rivero Espinoza', 'Doña Eliana',
-  '73540555', '73540555', TRUE, 'ECO-DONAEL55'
-)
+VALUES
+  (
+    'usr-demo-vecino-01', 'buyer', 'Mateo Quispe (Demo)', NULL,
+    'Zona Villa Exaltación, Calle 4 #120, El Alto',
+    'Zona Villa Exaltación, Calle 4 #120, El Alto', '',
+    TRUE, '+59160000001', '1234', TRUE, TRUE,
+    120, 50, 2, 'ECO-DEMO-V01',
+    FALSE, NULL, ''
+  ),
+  (
+    'mer-demo-puesto-01', 'merchant', 'Rosa Mamani (Demo)', 'Puesto Demo Sabores del Barrio',
+    'Mercado Villa Exaltación - Puesto Demo 10, El Alto', '', 'Lun-Dom 08:00-20:00',
+    TRUE, '+59170000002', '2468', TRUE, TRUE,
+    0, 20, 3, 'ECO-DEMO-C02',
+    FALSE, NULL, ''
+  ),
+  (
+    'rid-demo-eco-01', 'rider', 'Lucas Condori (Demo)', 'bicicleta',
+    'Av. Cívica #45, El Alto', 'Av. Cívica #45, El Alto', '',
+    TRUE, '+59170000003', '4321', TRUE, TRUE,
+    0, 0, 0, 'ECO-R-DEMO',
+    TRUE, 'ECO-R-DEMO', 'DEMO-CI-0001'
+  )
 ON CONFLICT (id) DO NOTHING;
 
 -- 7. SUPABASE STORAGE BUCKETS Y POLÍTICAS
+-- Buckets públicos para catálogo e interfaz comunitaria (3 buckets)
 INSERT INTO storage.buckets (id, name, public)
 VALUES
   ('avatars', 'avatars', TRUE),
   ('product-images', 'product-images', TRUE),
-  ('qr-bancarios', 'qr-bancarios', TRUE),
-  ('rider-verifications', 'rider-verifications', TRUE)
+  ('qr-bancarios', 'qr-bancarios', TRUE)
 ON CONFLICT (id) DO UPDATE SET public = TRUE;
+
+-- Bucket ESTRICTAMENTE PRIVADO para documentos de identidad (CI y selfies de Eco-Riders).
+-- Solo accesible desde servidor (service_role) mediante URLs firmadas de corta duración (createSignedUrl).
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('rider-verifications', 'rider-verifications', FALSE)
+ON CONFLICT (id) DO UPDATE SET public = FALSE;
 
 DROP POLICY IF EXISTS "EcoBanco Public Read Storage" ON storage.objects;
 CREATE POLICY "EcoBanco Public Read Storage"
 ON storage.objects FOR SELECT
-USING (bucket_id IN ('avatars', 'product-images', 'qr-bancarios', 'rider-verifications'));
+USING (bucket_id IN ('avatars', 'product-images', 'qr-bancarios'));
 
 DROP POLICY IF EXISTS "EcoBanco Upload Storage" ON storage.objects;
 CREATE POLICY "EcoBanco Upload Storage"
 ON storage.objects FOR INSERT
-WITH CHECK (bucket_id IN ('avatars', 'product-images', 'qr-bancarios', 'rider-verifications'));
+WITH CHECK (bucket_id IN ('avatars', 'product-images', 'qr-bancarios'));
 
 DROP POLICY IF EXISTS "EcoBanco Update Storage" ON storage.objects;
 CREATE POLICY "EcoBanco Update Storage"
 ON storage.objects FOR UPDATE
-USING (bucket_id IN ('avatars', 'product-images', 'qr-bancarios', 'rider-verifications'));
+USING (bucket_id IN ('avatars', 'product-images', 'qr-bancarios'));
 
 DROP POLICY IF EXISTS "EcoBanco Delete Storage" ON storage.objects;
 CREATE POLICY "EcoBanco Delete Storage"
 ON storage.objects FOR DELETE
-USING (bucket_id IN ('avatars', 'product-images', 'qr-bancarios', 'rider-verifications'));
+USING (bucket_id IN ('avatars', 'product-images', 'qr-bancarios'));
 
 -- 8. Recargar caché de esquema de PostgREST
 NOTIFY pgrst, 'reload schema';

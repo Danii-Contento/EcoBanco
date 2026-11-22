@@ -1058,7 +1058,7 @@ export default function PanelCaseritaPage() {
                     type="text"
                     value={loginIdentifier}
                     onChange={(e) => setLoginIdentifier(e.target.value)}
-                    placeholder="Ej. Doña Eliana o 73540555"
+                    placeholder="Ej. Sabores del Barrio o 70000002"
                     className="w-full px-4 py-3.5 min-h-[48px] rounded-xl eco-input text-base"
                   />
                 </div>
@@ -1071,7 +1071,7 @@ export default function PanelCaseritaPage() {
                     type="tel"
                     value={loginPhone}
                     onChange={(e) => setLoginPhone(e.target.value)}
-                    placeholder="Ej. 73540555"
+                    placeholder="Ej. 70000002"
                     className="w-full px-4 py-3.5 min-h-[48px] rounded-xl eco-input text-base"
                   />
                 </div>
@@ -1140,7 +1140,7 @@ export default function PanelCaseritaPage() {
                     required
                     value={regPhone}
                     onChange={(e) => setRegPhone(e.target.value)}
-                    placeholder="Ej. 73540555"
+                    placeholder="Ej. 76543210"
                     className="w-full px-4 py-3.5 min-h-[48px] rounded-xl eco-input text-base"
                   />
                 </div>

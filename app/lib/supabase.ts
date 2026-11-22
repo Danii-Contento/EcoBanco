@@ -123,31 +123,31 @@ export interface SupabaseRampTransactionRow {
   created_at: string;
 }
 
-// Precarga únicamente la cuenta real de Eliana Rivero Espinoza
-export const ELIANA_SEED_ROW: SupabaseUserRow = {
-  id: "mer-eliana-01",
+// Precarga únicamente una cuenta demo ficticia de evaluación (sin datos de personas reales en código)
+export const DEMO_MERCHANT_SEED_ROW: SupabaseUserRow = {
+  id: "mer-demo-puesto-01",
   role: "merchant",
-  name: "Eliana Rivero Espinoza",
-  store_name: "Doña Eliana",
-  store_description: "",
-  address: "",
-  schedule: "",
+  name: "Rosa Mamani (Demo)",
+  store_name: "Puesto Demo Sabores del Barrio",
+  store_description: "Puesto de demostración para evaluación comunitaria en El Alto.",
+  address: "Mercado Villa Exaltación - Puesto Demo 10, El Alto",
+  schedule: "Lun-Dom 08:00-20:00",
   avatar_url: "",
-  profile_completed: false,
-  phone: "+59173540555",
-  password: "73540555",
+  profile_completed: true,
+  phone: "+59170000002",
+  password: "2468",
   bank_qr_url: "",
   email: null,
   is_prosumer: false,
   is_premium: false,
-  fiat_wallet_enabled: false,
+  fiat_wallet_enabled: true,
   qr_enabled: false,
   motes_enabled: true,
-  motes_balance: 0,
+  motes_balance: 20,
   fiat_balance_bs: 0,
-  free_deliveries_remaining: 0,
+  free_deliveries_remaining: 3,
   sales_count: 0,
-  referral_code: "ECO-DONAEL55",
+  referral_code: "ECO-DEMO-C02",
   invited_count: 0,
   motes_earned: 0,
   free_deliveries_earned: 0,
@@ -424,14 +424,14 @@ export const supabaseTables = {
 
     const seedTask = (async () => {
       const existing = await restRequest<SupabaseUserRow[]>("users", {
-        query: `id=eq.${encodeURIComponent(ELIANA_SEED_ROW.id)}&limit=1`,
+        query: `id=eq.${encodeURIComponent(DEMO_MERCHANT_SEED_ROW.id)}&limit=1`,
       });
 
       if (existing.length === 0) {
         await restWriteWithSchemaFallback<SupabaseUserRow[]>(
           "users",
           "POST",
-          ELIANA_SEED_ROW as unknown as Record<string, unknown>,
+          DEMO_MERCHANT_SEED_ROW as unknown as Record<string, unknown>,
           undefined,
           "resolution=ignore-duplicates,return=representation"
         );
@@ -740,11 +740,15 @@ export const supabaseTables = {
 };
 
 // ============================================================================
-// Supabase Storage (Buckets: avatars, product-images, qr-bancarios, rider-verifications)
+// Supabase Storage
+// - Buckets públicos: avatars, product-images, qr-bancarios
+// - Bucket privado (documentos de identidad): rider-verifications (solo createSignedUrl)
 // ============================================================================
 
 const DATA_URL_REGEX =
   /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/;
+
+export const SIGNED_URL_TTL_SECONDS = 300; // 5 minutos
 
 function mimeToExtension(mime: string): string {
   switch (mime.toLowerCase()) {
@@ -765,14 +769,157 @@ export function isValidBucket(value: string): value is StorageBucket {
   return (VALID_BUCKETS as ReadonlyArray<string>).includes(value);
 }
 
+export function isPrivateBucket(bucket: StorageBucket): boolean {
+  return bucket === SUPABASE_BUCKETS.RIDER_VERIFICATIONS;
+}
+
+export function toPrivateStorageRef(
+  bucket: StorageBucket,
+  objectPath: string
+): string {
+  const cleanPath = objectPath.replace(/^\/+/, "");
+  return `private:${bucket}:${cleanPath}`;
+}
+
+/**
+ * Extrae el objectPath relativo de un archivo dentro de un bucket privado
+ * (acepta referencia `private:<bucket>:<path>`, ruta cruda o URLs legacy/firmadas).
+ */
+export function extractPrivateObjectPath(
+  bucket: StorageBucket,
+  value?: string | null
+): string | null {
+  const raw = (value || "").trim();
+  if (!raw || raw.startsWith("data:")) return null;
+
+  const refPrefix = `private:${bucket}:`;
+  if (raw.startsWith(refPrefix)) {
+    const p = raw.slice(refPrefix.length).replace(/^\/+/, "");
+    return p && !p.includes("..") ? p : null;
+  }
+
+  const publicMarker = `/storage/v1/object/public/${bucket}/`;
+  const signMarker = `/storage/v1/object/sign/${bucket}/`;
+  const authMarker = `/storage/v1/object/authenticated/${bucket}/`;
+
+  for (const marker of [publicMarker, signMarker, authMarker]) {
+    const idx = raw.indexOf(marker);
+    if (idx >= 0) {
+      const after = raw.slice(idx + marker.length).split("?")[0];
+      const decoded = decodeURIComponent(after).replace(/^\/+/, "");
+      return decoded && !decoded.includes("..") ? decoded : null;
+    }
+  }
+
+  if (raw.startsWith("/api/storage")) {
+    try {
+      const parsed = new URL(raw, "http://localhost");
+      if (parsed.searchParams.get("bucket") === bucket) {
+        const p = (parsed.searchParams.get("path") || "").replace(/^\/+/, "");
+        return p && !p.includes("..") ? p : null;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
+    const clean = raw.replace(/^\/+/, "");
+    return clean && !clean.includes("..") ? clean : null;
+  }
+
+  return null;
+}
+
+function encodeStoragePath(objectPath: string): string {
+  return objectPath
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+/**
+ * Genera una URL firmada de corta duración (`createSignedUrl`) en Supabase Storage
+ * usando la clave de servidor para documentos privados (`rider-verifications`).
+ */
+export async function createSignedStorageUrl(
+  bucket: StorageBucket,
+  objectPath: string,
+  expiresInSeconds = SIGNED_URL_TTL_SECONDS
+): Promise<string | null> {
+  const cleanPath = (objectPath || "").trim().replace(/^\/+/, "");
+  if (!cleanPath || cleanPath.includes("..")) {
+    return null;
+  }
+
+  const creds = getSupabaseCredentials();
+  const encodedPath = encodeStoragePath(cleanPath);
+  const res = await fetch(
+    `${creds.url}/storage/v1/object/sign/${bucket}/${encodedPath}`,
+    {
+      method: "POST",
+      headers: {
+        apikey: creds.key,
+        Authorization: `Bearer ${creds.key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ expiresIn: expiresInSeconds }),
+      cache: "no-store",
+    }
+  );
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const data = (await res.json()) as {
+    signedURL?: string;
+    signedUrl?: string;
+  };
+  const relative = (data.signedURL || data.signedUrl || "").trim();
+  if (!relative) return null;
+
+  if (relative.startsWith("http://") || relative.startsWith("https://")) {
+    return relative;
+  }
+  const normalizedRelative = relative.startsWith("/") ? relative : `/${relative}`;
+  if (normalizedRelative.startsWith("/storage/v1/")) {
+    return `${creds.url}${normalizedRelative}`;
+  }
+  return `${creds.url}/storage/v1${normalizedRelative}`;
+}
+
 export async function uploadImageToStorage(
   bucket: StorageBucket,
   dataUrlOrUrl: string,
   ownerId: string
-): Promise<{ publicUrl: string; path: string }> {
+): Promise<{
+  publicUrl: string;
+  path: string;
+  storageRef?: string;
+  signedUrl?: string | null;
+}> {
   const trimmed = (dataUrlOrUrl || "").trim();
   if (!trimmed) {
     return { publicUrl: "", path: "" };
+  }
+
+  if (isPrivateBucket(bucket)) {
+    const existingPrivatePath = extractPrivateObjectPath(bucket, trimmed);
+    if (existingPrivatePath) {
+      const signedUrl = await createSignedStorageUrl(
+        bucket,
+        existingPrivatePath,
+        SIGNED_URL_TTL_SECONDS
+      );
+      return {
+        path: existingPrivatePath,
+        storageRef: toPrivateStorageRef(bucket, existingPrivatePath),
+        signedUrl,
+        publicUrl: signedUrl || "",
+      };
+    }
   }
 
   if (
@@ -821,6 +968,20 @@ export async function uploadImageToStorage(
     throw new Error(`Error subiendo imagen al bucket ${bucket}: ${errText}`);
   }
 
+  if (isPrivateBucket(bucket)) {
+    const signedUrl = await createSignedStorageUrl(
+      bucket,
+      objectPath,
+      SIGNED_URL_TTL_SECONDS
+    );
+    return {
+      path: objectPath,
+      storageRef: toPrivateStorageRef(bucket, objectPath),
+      signedUrl,
+      publicUrl: signedUrl || "",
+    };
+  }
+
   return {
     path: objectPath,
     publicUrl: `${creds.url}/storage/v1/object/public/${bucket}/${objectPath}`,
@@ -836,10 +997,19 @@ export async function getStoredObject(
   }
 
   const creds = getSupabaseCredentials();
-  const res = await fetch(
-    `${creds.url}/storage/v1/object/public/${bucket}/${objectPath}`,
-    { cache: "no-store" }
-  );
+  const encodedPath = encodeStoragePath(objectPath);
+  const endpoint = isPrivateBucket(bucket)
+    ? `${creds.url}/storage/v1/object/authenticated/${bucket}/${encodedPath}`
+    : `${creds.url}/storage/v1/object/public/${bucket}/${encodedPath}`;
+  const res = await fetch(endpoint, {
+    headers: isPrivateBucket(bucket)
+      ? {
+          apikey: creds.key,
+          Authorization: `Bearer ${creds.key}`,
+        }
+      : undefined,
+    cache: "no-store",
+  });
   if (!res.ok) return null;
   const arrayBuffer = await res.arrayBuffer();
   return {

@@ -56,6 +56,7 @@ export async function POST(request: NextRequest) {
       referral_code,
       identifier,
       password,
+      pin,
       storeDescription,
       address,
       schedule,
@@ -168,10 +169,14 @@ export async function POST(request: NextRequest) {
           )
         );
       }
-      const result = await db.loginBuyerByPhone(normalizedPhone);
+      const resolvedPin = String(pin ?? password ?? "");
+      const result = await db.loginBuyerByPhone(normalizedPhone, resolvedPin);
       if (!result.ok || !result.buyer) {
         return applyNoStoreHeaders(
-          NextResponse.json({ error: result.error }, { status: 404 })
+          NextResponse.json(
+            { error: result.error },
+            { status: result.unauthorized ? 401 : 404 }
+          )
         );
       }
       clearMerchantRuntimeCache(session.merchantId);
@@ -355,10 +360,12 @@ export async function POST(request: NextRequest) {
         deliveryAddress || delivery_address || ""
       ).trim();
       const resolvedRef = String(referralCode || referral_code || "");
+      const resolvedPin = String(pin ?? password ?? "");
       const result = await db.registerOrLoginBuyer({
         name: cleanName,
         email: String(email || ""),
         phone: normalizedPhone,
+        pin: resolvedPin,
         deliveryAddress: resolvedAddress,
         referralCode: resolvedRef || undefined,
         pollarUserId: resolvedPollarUserId,
@@ -366,7 +373,10 @@ export async function POST(request: NextRequest) {
       });
       if (!result.ok || !result.buyer) {
         return applyNoStoreHeaders(
-          NextResponse.json({ error: result.error }, { status: 400 })
+          NextResponse.json(
+            { error: result.error },
+            { status: result.unauthorized ? 401 : 400 }
+          )
         );
       }
       clearMerchantRuntimeCache(session.merchantId);

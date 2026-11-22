@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  Lock,
   MapPin,
   QrCode,
   ShieldCheck,
@@ -45,8 +46,8 @@ interface QuickOrderModalProps {
   onQuantityChange: (nextQty: number) => void;
   onSpecialNotesChange: (notes: string) => void;
   onBuyerUpdated: (buyer: User) => void;
-  onPayWithBalance: (method: "fiat" | "motes") => void;
-  onPayWithBankQr: () => void;
+  onPayWithBalance: (method: "fiat" | "motes", buyerPin: string) => void;
+  onPayWithBankQr: (buyerPin: string) => void;
   onClose: () => void;
 }
 
@@ -77,6 +78,8 @@ export function QuickOrderModal({
   const [editingIdentity, setEditingIdentity] = useState<boolean>(false);
   const [nameInput, setNameInput] = useState<string>("");
   const [phoneDigits, setPhoneDigits] = useState<string>("");
+  const [pinInput, setPinInput] = useState<string>("");
+  const [spendPinInput, setSpendPinInput] = useState<string>("");
   const [addressInput, setAddressInput] = useState<string>("");
   const [stepError, setStepError] = useState<string | null>(null);
   const [isSavingStep, setIsSavingStep] = useState<boolean>(false);
@@ -97,6 +100,8 @@ export function QuickOrderModal({
     setStepError(null);
     setNameInput(buyer?.name || "");
     setPhoneDigits(sanitizeLocalPhoneInput(buyer?.phone || ""));
+    setPinInput("");
+    setSpendPinInput("");
     setAddressInput(buyer?.deliveryAddress || buyer?.address || "");
     setEditingIdentity(!hasValidIdentity);
   }, [product?.id]);
@@ -163,6 +168,7 @@ export function QuickOrderModal({
       if (needsIdentitySave) {
         const cleanName = nameInput.trim();
         const normalizedPhone = normalizeBolivianPhone(phoneDigits);
+        const cleanPin = pinInput.replace(/\D/g, "").slice(0, 4);
         if (!cleanName) {
           setStepError("Escribe tu nombre o apodo para continuar.");
           return;
@@ -170,6 +176,12 @@ export function QuickOrderModal({
         if (!normalizedPhone) {
           setStepError(
             "Ingresa los 8 dígitos de tu WhatsApp de Bolivia (ej. 76543210)."
+          );
+          return;
+        }
+        if (cleanPin.length !== 4) {
+          setStepError(
+            "Ingresa tu PIN personal de 4 números para proteger tu cuenta y tu saldo."
           );
           return;
         }
@@ -181,6 +193,7 @@ export function QuickOrderModal({
             action: "quick_neighbor_login",
             name: cleanName,
             phone: normalizedPhone,
+            pin: cleanPin,
             deliveryAddress: cleanAddress,
             pollar_user_id: pollarDraft?.pollarUserId || undefined,
             stellar_address: pollarDraft?.stellarAddress || undefined,
@@ -193,6 +206,7 @@ export function QuickOrderModal({
         }
 
         onBuyerUpdated(data.buyer as User);
+        setSpendPinInput(cleanPin);
         setEditingIdentity(false);
         setStep(2);
         return;
@@ -242,11 +256,18 @@ export function QuickOrderModal({
 
   const handleConfirmPayment = () => {
     setStepError(null);
-    if (paymentChoice === "wallet" && canPayWithWallet) {
-      onPayWithBalance(walletCurrency);
+    const cleanSpendPin = spendPinInput.replace(/\D/g, "").slice(0, 4);
+    if (cleanSpendPin.length !== 4) {
+      setStepError(
+        "Ingresa tu PIN personal de 4 números para autorizar el pago protegido."
+      );
       return;
     }
-    onPayWithBankQr();
+    if (paymentChoice === "wallet" && canPayWithWallet) {
+      onPayWithBalance(walletCurrency, cleanSpendPin);
+      return;
+    }
+    onPayWithBankQr(cleanSpendPin);
   };
 
   const displayError = stepError || externalError;
@@ -389,12 +410,12 @@ export function QuickOrderModal({
               </div>
             </div>
 
-            {/* Identidad rápida (solo Nombre + WhatsApp 8 dígitos, sin clave ni correo) */}
+            {/* Identidad rápida protegida (Nombre + WhatsApp 8 dígitos + PIN 4 dígitos) */}
             {!hasValidIdentity || editingIdentity ? (
               <div className="rounded-2xl bg-surface-soft dark:bg-[#14221D] border border-earth-border dark:border-oro/30 p-4 space-y-3.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-extrabold uppercase tracking-wide text-primary dark:text-[#69D86E]">
-                    👤 Tus datos rápidos (sin clave ni correo)
+                    👤 Tus datos protegidos (WhatsApp + PIN)
                   </span>
                   {hasValidIdentity && (
                     <button
@@ -436,6 +457,40 @@ export function QuickOrderModal({
                   value={phoneDigits}
                   onChange={setPhoneDigits}
                 />
+
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="order-buyer-pin"
+                    className="block text-xs font-extrabold uppercase tracking-wide text-ink dark:text-arena"
+                  >
+                    🔒 Tu PIN secreto de 4 números *
+                  </label>
+                  <div className="flex items-center rounded-2xl border-2 border-earth-border dark:border-oro/45 bg-surface dark:bg-[#0D1714] focus-within:border-primary dark:focus-within:border-brillo px-3.5">
+                    <Lock
+                      className="w-5 h-5 text-ink-muted dark:text-brillo shrink-0 mr-2"
+                      aria-hidden="true"
+                    />
+                    <input
+                      id="order-buyer-pin"
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={4}
+                      required
+                      value={pinInput}
+                      onChange={(e) =>
+                        setPinInput(
+                          e.target.value.replace(/\D/g, "").slice(0, 4)
+                        )
+                      }
+                      placeholder="Ej. 1234"
+                      className="flex-1 min-w-0 min-h-[50px] bg-transparent text-base font-extrabold tracking-[0.3em] text-ink dark:text-arena placeholder:tracking-normal placeholder:font-semibold placeholder:text-ink-muted/60 focus:outline-none"
+                    />
+                  </div>
+                  <p className="text-xs font-semibold text-ink-muted dark:text-arena/75">
+                    Si eres nuevo, elige 4 números para proteger tu saldo. Si ya
+                    tienes cuenta, escribe tu PIN.
+                  </p>
+                </div>
               </div>
             ) : (
               <div className="rounded-2xl bg-surface-soft dark:bg-[#14221D] border border-earth-border dark:border-oro/30 px-4 py-3 flex items-center justify-between gap-3">
@@ -661,6 +716,40 @@ export function QuickOrderModal({
                   />
                 )}
               </button>
+            </div>
+
+            {/* Autorización con PIN personal antes de gastar saldo */}
+            <div className="rounded-2xl bg-surface-soft dark:bg-[#14221D] border-2 border-earth-border dark:border-oro/35 p-4 space-y-2">
+              <label
+                htmlFor="order-spend-pin"
+                className="block text-xs font-extrabold uppercase tracking-wide text-ink dark:text-arena"
+              >
+                🔒 Confirma tu PIN de 4 números para autorizar el pago *
+              </label>
+              <div className="flex items-center rounded-2xl border-2 border-earth-border dark:border-oro/45 bg-surface dark:bg-[#0D1714] focus-within:border-primary dark:focus-within:border-brillo px-3.5">
+                <Lock
+                  className="w-5 h-5 text-primary dark:text-brillo shrink-0 mr-2"
+                  aria-hidden="true"
+                />
+                <input
+                  id="order-spend-pin"
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={4}
+                  value={spendPinInput}
+                  onChange={(e) =>
+                    setSpendPinInput(
+                      e.target.value.replace(/\D/g, "").slice(0, 4)
+                    )
+                  }
+                  placeholder="Ingresa tu PIN de 4 números"
+                  className="flex-1 min-w-0 min-h-[50px] bg-transparent text-base font-extrabold tracking-[0.3em] text-ink dark:text-arena placeholder:tracking-normal placeholder:font-semibold placeholder:text-ink-muted/60 focus:outline-none"
+                />
+              </div>
+              <p className="text-xs font-semibold text-ink-muted dark:text-arena/75">
+                Protección comunitaria: nadie puede gastar el saldo de tu
+                Libreta sin tu PIN personal.
+              </p>
             </div>
 
             {/* Sello Pago Protegido */}

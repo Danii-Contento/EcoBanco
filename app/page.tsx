@@ -66,7 +66,7 @@ export default function LandingPage() {
                   <ShoppingBasket className="w-7 h-7" aria-hidden="true" />
                 </div>
                 <span className="px-3 py-1 rounded-full bg-primary/10 dark:bg-brote/20 text-primary dark:text-[#69D86E] text-sm font-bold">
-                  Sin registro
+                  Explora libre
                 </span>
               </div>
 
@@ -75,8 +75,8 @@ export default function LandingPage() {
                   Comprar a mis caseritas
                 </h2>
                 <p className="text-base text-ink-muted dark:text-arena/85 leading-relaxed">
-                  Pide comida fresca y productos de puestos abiertos en tu zona,
-                  sin registrarte.
+                  Explora puestos abiertos en tu barrio y protege tus compras
+                  con tu WhatsApp y PIN de 4 números.
                 </p>
               </div>
             </div>

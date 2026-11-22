@@ -69,17 +69,17 @@ async function loadPhoneModuleFromTs() {
 async function checkPhoneNormalization() {
   const phoneMod = await loadPhoneModuleFromTs();
   const validCases = [
-    ["73540555", "+59173540555"],
-    ["+591 7354-0555", "+59173540555"],
-    ["59173540555", "+59173540555"],
-    ["0059173540555", "+59173540555"],
-    ["073540555", "+59173540555"],
+    ["70000002", "+59170000002"],
+    ["+591 7000-0002", "+59170000002"],
+    ["59170000002", "+59170000002"],
+    ["0059170000002", "+59170000002"],
+    ["070000002", "+59170000002"],
     ["+59176543210", "+59176543210"],
-    ["  6406 5089 ", "+59164065089"],
+    ["  6000 0001 ", "+59160000001"],
     ["(591) 7123-4567", "+59171234567"],
   ];
 
-  const invalidCases = ["12345", "abc", "", "591123", "1234567890123", "+5917354"];
+  const invalidCases = ["12345", "abc", "", "591123", "1234567890123", "+5917000"];
 
   for (const [input, expected] of validCases) {
     const actual = phoneMod.normalizeBolivianPhone(input);
@@ -105,7 +105,7 @@ async function checkPhoneNormalization() {
     }
   }
 
-  if (!phoneMod.areSameBolivianPhone("73540555", "+591 7354 0555")) {
+  if (!phoneMod.areSameBolivianPhone("70000002", "+591 7000 0002")) {
     record(
       "FAIL",
       "PhoneNormalization",
@@ -211,6 +211,7 @@ function checkServerAndClientGuards() {
       file: "app/api/escrow/route.ts",
       mustContain: [
         "releaseEscrowByBuyer",
+        "buyerPin",
         "403",
         "401",
         'pickup_pin: ""',
@@ -229,7 +230,15 @@ function checkServerAndClientGuards() {
     },
     {
       file: "app/api/storage/route.ts",
-      mustContain: ["!session.merchantId", "403", "401", "MAX_RIDER_VERIFICATION_IMAGE_BYTES"],
+      mustContain: [
+        "!session.merchantId",
+        "!session.riderId",
+        "isPrivateBucket",
+        "createSignedStorageUrl",
+        "403",
+        "401",
+        "MAX_RIDER_VERIFICATION_IMAGE_BYTES",
+      ],
     },
     {
       file: "app/lib/store.ts",
@@ -237,6 +246,8 @@ function checkServerAndClientGuards() {
         "claimDeliveryAtomically",
         "updateDeliveryIfAssignedToRider",
         "releaseEscrowByBuyer",
+        "mapRiderRowWithSignedDocs",
+        "storedBuyerPin !== providedPin",
         "sellerAccount.id === activeBuyer.id",
         'delivery_pin: ""',
         "existing.seller_id !== activeMer.id",

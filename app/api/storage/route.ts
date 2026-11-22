@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applyNoStoreHeaders, readSession } from "@/app/lib/session";
 import {
+  createSignedStorageUrl,
+  extractPrivateObjectPath,
   getStoredObject,
+  isPrivateBucket,
   isValidBucket,
+  SIGNED_URL_TTL_SECONDS,
+  supabaseTables,
   uploadImageToStorage,
 } from "@/app/lib/supabase";
 
@@ -13,12 +18,99 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const bucket = searchParams.get("bucket") || "";
-    const objectPath = searchParams.get("path") || "";
+    const objectPath = (searchParams.get("path") || "").trim().replace(/^\/+/, "");
+    const mode = searchParams.get("mode") || "";
 
     if (!isValidBucket(bucket) || !objectPath || objectPath.includes("..")) {
-      return NextResponse.json(
-        { error: "Bucket o ruta de archivo inválida." },
-        { status: 400 }
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { error: "Bucket o ruta de archivo inválida." },
+          { status: 400 }
+        )
+      );
+    }
+
+    if (isPrivateBucket(bucket)) {
+      const session = readSession(request);
+      if (!session.riderId) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Acceso denegado. Los documentos de verificación son privados y requieren sesión de repartidor.",
+            },
+            { status: session.buyerId || session.merchantId ? 403 : 401 }
+          )
+        );
+      }
+
+      const riderRow = await supabaseTables.getUserById(session.riderId);
+      const ownedPaths = new Set(
+        [
+          extractPrivateObjectPath(bucket, riderRow?.selfie_url),
+          extractPrivateObjectPath(bucket, riderRow?.ci_photo_url),
+        ].filter((p): p is string => Boolean(p))
+      );
+
+      const belongsToRider =
+        ownedPaths.has(objectPath) ||
+        objectPath.startsWith(`${session.riderId}-`) ||
+        objectPath.startsWith(`${session.riderId}/`);
+
+      if (!belongsToRider) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: "Solo puedes consultar tus propios documentos de verificación." },
+            { status: 403 }
+          )
+        );
+      }
+
+      if (mode === "signed") {
+        const signedUrl = await createSignedStorageUrl(
+          bucket,
+          objectPath,
+          SIGNED_URL_TTL_SECONDS
+        );
+        if (!signedUrl) {
+          return applyNoStoreHeaders(
+            NextResponse.json(
+              { error: "No se pudo generar el enlace temporal del documento." },
+              { status: 404 }
+            )
+          );
+        }
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              ok: true,
+              bucket,
+              path: objectPath,
+              signedUrl,
+              expiresIn: SIGNED_URL_TTL_SECONDS,
+            },
+            { status: 200 }
+          )
+        );
+      }
+
+      const storedPrivate = await getStoredObject(bucket, objectPath);
+      if (!storedPrivate) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { error: "Documento no encontrado en Storage privado." },
+            { status: 404 }
+          )
+        );
+      }
+
+      return applyNoStoreHeaders(
+        new NextResponse(new Uint8Array(storedPrivate.buffer), {
+          status: 200,
+          headers: {
+            "Content-Type": storedPrivate.contentType,
+          },
+        })
       );
     }
 
@@ -38,9 +130,11 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch {
-    return NextResponse.json(
-      { error: "No se pudo recuperar el archivo de Storage." },
-      { status: 500 }
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        { error: "No se pudo recuperar el archivo de Storage." },
+        { status: 500 }
+      )
     );
   }
 }
@@ -112,6 +206,9 @@ export async function POST(request: NextRequest) {
           )
         );
       }
+      if (session.riderId) {
+        resolvedOwnerId = `${session.riderId}-doc`;
+      }
     }
 
     const result = await uploadImageToStorage(
@@ -125,7 +222,11 @@ export async function POST(request: NextRequest) {
         {
           ok: true,
           bucket,
+          private: isPrivateBucket(bucket),
           path: result.path,
+          storageRef: result.storageRef ?? null,
+          signedUrl: result.signedUrl ?? null,
+          expiresIn: isPrivateBucket(bucket) ? SIGNED_URL_TTL_SECONDS : null,
           publicUrl: result.publicUrl,
         },
         { status: 201 }

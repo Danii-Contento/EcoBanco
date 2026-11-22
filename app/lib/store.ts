@@ -14,12 +14,16 @@ import {
   normalizeBolivianPhone,
 } from "./phone";
 import {
+  SIGNED_URL_TTL_SECONDS,
   SUPABASE_BUCKETS,
   SupabaseProductRow,
   SupabaseRampTransactionRow,
   SupabaseUserRow,
+  createSignedStorageUrl,
+  extractPrivateObjectPath,
   isRiderUserRow,
   supabaseTables,
+  toPrivateStorageRef,
   uploadImageToStorage,
 } from "./supabase";
 import {
@@ -380,9 +384,9 @@ function mapUserRow(
     freeDeliveries,
     free_deliveries_remaining: freeDeliveries,
     salesCount: Number(row.sales_count ?? 0),
-    ciNumber: row.ci_number ?? "",
-    selfieUrl: row.selfie_url ?? "",
-    ciPhotoUrl: row.ci_photo_url ?? "",
+    ciNumber: isSessionActive && isRider ? row.ci_number ?? "" : "",
+    selfieUrl: "",
+    ciPhotoUrl: "",
     riderVerified: Boolean(row.rider_verified),
     riderInviteCode: row.rider_invite_code ?? undefined,
     pollar_user_id: row.pollar_user_id ?? null,
@@ -414,9 +418,9 @@ function mapRiderRow(row: SupabaseUserRow, isSessionActive: boolean): Rider {
     vehicleType:
       row.store_name === "moto_electrica" ? "moto_electrica" : "bicicleta",
     address: row.address || row.delivery_address || "",
-    ciNumber: row.ci_number || "",
-    selfieUrl: row.selfie_url || row.avatar_url || "",
-    ciPhotoUrl: row.ci_photo_url || "",
+    ciNumber: isSessionActive ? row.ci_number || "" : "",
+    selfieUrl: "",
+    ciPhotoUrl: "",
     riderVerified: Boolean(row.rider_verified),
     riderInviteCode: row.rider_invite_code || "",
     isLoggedIn: isSessionActive,
@@ -430,6 +434,53 @@ function mapRiderRow(row: SupabaseUserRow, isSessionActive: boolean): Rider {
     pollar_user_id: row.pollar_user_id ?? null,
     stellar_address: row.stellar_address ?? null,
     createdAt: row.created_at,
+  };
+}
+
+/**
+ * Resuelve los documentos privados de verificación del repartidor (CI y selfie)
+ * mediante URLs firmadas de corta duración (`createSignedUrl`) exclusivamente para
+ * la sesión autenticada del propio repartidor.
+ */
+async function mapRiderRowWithSignedDocs(
+  row: SupabaseUserRow,
+  isSessionActive: boolean
+): Promise<Rider> {
+  const rider = mapRiderRow(row, isSessionActive);
+  if (!isSessionActive) {
+    return rider;
+  }
+
+  const selfiePath = extractPrivateObjectPath(
+    SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
+    row.selfie_url || row.avatar_url
+  );
+  const ciPath = extractPrivateObjectPath(
+    SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
+    row.ci_photo_url
+  );
+
+  const [signedSelfie, signedCi] = await Promise.all([
+    selfiePath
+      ? createSignedStorageUrl(
+          SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
+          selfiePath,
+          SIGNED_URL_TTL_SECONDS
+        ).catch(() => null)
+      : Promise.resolve(null),
+    ciPath
+      ? createSignedStorageUrl(
+          SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
+          ciPath,
+          SIGNED_URL_TTL_SECONDS
+        ).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  return {
+    ...rider,
+    selfieUrl: signedSelfie || "",
+    ciPhotoUrl: signedCi || "",
   };
 }
 
@@ -576,7 +627,7 @@ export class SupabaseEcoBancoRepository {
       const riderRow = await supabaseTables.getUserById(session.riderId);
       const validRider =
         riderRow && isRiderUserRow(riderRow)
-          ? mapRiderRow(riderRow, true)
+          ? await mapRiderRowWithSignedDocs(riderRow, true)
           : null;
       return {
         buyer: createEmptyBuyer(),
@@ -625,7 +676,7 @@ export class SupabaseEcoBancoRepository {
       merchant: merchantRow
         ? mapUserRow(merchantRow, orders, deliveries, users, true)
         : null,
-      rider: riderRow ? mapRiderRow(riderRow, true) : null,
+      rider: riderRow ? await mapRiderRowWithSignedDocs(riderRow, true) : null,
       activeBuyerType,
     };
   }
@@ -682,7 +733,7 @@ export class SupabaseEcoBancoRepository {
       products: productRows.map((row) => mapProductRow(row, users)),
       orders,
       deliveries,
-      rider: riderRow ? mapRiderRow(riderRow, true) : null,
+      rider: riderRow ? await mapRiderRowWithSignedDocs(riderRow, true) : null,
       activeBuyerType,
     };
   }
@@ -1113,21 +1164,23 @@ export class SupabaseEcoBancoRepository {
   // ============================================================================
   // Reglas estrictas del Comprador:
   // - Inicia estrictamente con motes_balance = 0, motes_enabled = false, fiat_wallet_enabled = true
-  // - Exige WhatsApp (phone) y Dirección de entrega (delivery_address)
+  // - Exige WhatsApp (phone) y PIN secreto de 4 dígitos para proteger el saldo del vecino
   // - Los bonos de referido SOLO se acreditan cuando un usuario NUEVO real se registra con código
   // ============================================================================
   public async registerOrLoginBuyer(input: {
     name: string;
     email?: string;
     phone: string;
+    pin?: string;
     deliveryAddress: string;
     referralCode?: string;
     pollarUserId?: string;
     stellarAddress?: string;
-  }): Promise<{ ok: boolean; error?: string; buyer?: User }> {
+  }): Promise<{ ok: boolean; unauthorized?: boolean; error?: string; buyer?: User }> {
     const cleanName = (input.name || "").trim();
     const cleanEmail = (input.email || "").trim().toLowerCase();
     const cleanPhone = normalizeBolivianPhone(input.phone);
+    const cleanPin = String(input.pin || "").replace(/\D/g, "").slice(0, 4);
     const cleanAddress = (input.deliveryAddress || "").trim();
     const cleanReferralCode = (input.referralCode || "").trim().toUpperCase();
 
@@ -1144,6 +1197,15 @@ export class SupabaseEcoBancoRepository {
         ok: false,
         error:
           "Ingresa un número de WhatsApp de Bolivia válido (8 dígitos, ej. 76543210).",
+      };
+    }
+
+    if (!/^\d{4}$/.test(cleanPin)) {
+      return {
+        ok: false,
+        unauthorized: true,
+        error:
+          "Ingresa tu PIN personal de 4 números para proteger tu cuenta y tu saldo.",
       };
     }
 
@@ -1183,6 +1245,30 @@ export class SupabaseEcoBancoRepository {
     const cleanStellarAddress = resolvedPollar.stellarAddress;
 
     if (existingBuyer) {
+      const storedPin = String(existingBuyer.password || "").trim();
+      if (storedPin) {
+        if (storedPin !== cleanPin) {
+          return {
+            ok: false,
+            unauthorized: true,
+            error:
+              "PIN incorrecto para este número de WhatsApp. Ingresa tu clave de 4 números.",
+          };
+        }
+      } else {
+        const hasExistingFunds =
+          Number(existingBuyer.fiat_balance_bs ?? 0) > 0 ||
+          Number(existingBuyer.motes_balance ?? 0) > 0;
+        if (hasExistingFunds) {
+          return {
+            ok: false,
+            unauthorized: true,
+            error:
+              "Esta cuenta tiene saldo protegido y requiere validación de PIN. Contacta soporte comunitario para restablecer tu PIN.",
+          };
+        }
+      }
+
       const isProsumer = Boolean(
         existingBuyer.is_prosumer ||
           existingBuyer.is_premium ||
@@ -1192,6 +1278,7 @@ export class SupabaseEcoBancoRepository {
         name: cleanName,
         ...(cleanEmail ? { email: cleanEmail } : {}),
         phone: cleanPhone,
+        ...(!storedPin ? { password: cleanPin } : {}),
         ...(cleanAddress
           ? { address: cleanAddress, delivery_address: cleanAddress }
           : {}),
@@ -1227,7 +1314,7 @@ export class SupabaseEcoBancoRepository {
       avatar_url: "",
       profile_completed: Boolean(cleanAddress),
       phone: cleanPhone,
-      password: null,
+      password: cleanPin,
       bank_qr_url: "",
       email: cleanEmail || null,
       is_prosumer: false,
@@ -1298,14 +1385,23 @@ export class SupabaseEcoBancoRepository {
   }
 
   public async loginBuyerByPhone(
-    phone: string
-  ): Promise<{ ok: boolean; error?: string; buyer?: User }> {
+    phone: string,
+    pin?: string
+  ): Promise<{ ok: boolean; unauthorized?: boolean; error?: string; buyer?: User }> {
     const cleanPhone = normalizeBolivianPhone(phone);
+    const cleanPin = String(pin || "").replace(/\D/g, "").slice(0, 4);
     if (!cleanPhone) {
       return {
         ok: false,
         error:
           "Ingresa un número de WhatsApp de Bolivia válido (8 dígitos, ej. 76543210).",
+      };
+    }
+    if (!/^\d{4}$/.test(cleanPin)) {
+      return {
+        ok: false,
+        unauthorized: true,
+        error: "Ingresa tu PIN personal de 4 números para abrir tu libreta.",
       };
     }
 
@@ -1326,7 +1422,16 @@ export class SupabaseEcoBancoRepository {
       return {
         ok: false,
         error:
-          "No encontramos pedidos guardados con ese WhatsApp todavía. Puedes pedir directo en el Mercado del Barrio sin registrarte.",
+          "No encontramos una cuenta con ese WhatsApp todavía. Crea tu acceso rápido con tu nombre, celular y PIN de 4 números.",
+      };
+    }
+
+    const storedPin = String(found.password || "").trim();
+    if (!storedPin || storedPin !== cleanPin) {
+      return {
+        ok: false,
+        unauthorized: true,
+        error: "PIN incorrecto para este número de WhatsApp.",
       };
     }
 
@@ -2198,6 +2303,7 @@ export class SupabaseEcoBancoRepository {
 
   // ============================================================================
   // Blindaje financiero del Escrow:
+  // - Exige PIN de 4 dígitos al vecino antes de autorizar cualquier gasto de saldo
   // - Rechaza cualquier compra si no hay saldo suficiente (PROHIBIDO comprar con saldo 0)
   // - Verifica fiat_balance_bs o motes_balance según método elegido
   // ============================================================================
@@ -2210,9 +2316,11 @@ export class SupabaseEcoBancoRepository {
     orderOptions?: {
       quantity?: number;
       specialNotes?: string;
+      buyerPin?: string;
     }
   ): Promise<{
     ok: boolean;
+    forbidden?: boolean;
     error?: string;
     receipt?: EscrowTransaction;
     order?: Order;
@@ -2294,6 +2402,29 @@ export class SupabaseEcoBancoRepository {
         error:
           "Debes completar tu número de WhatsApp y dirección de entrega antes de confirmar tu pedido.",
       };
+    }
+
+    if (buyerType === "buyer") {
+      const providedPin = String(orderOptions?.buyerPin || "")
+        .replace(/\D/g, "")
+        .slice(0, 4);
+      const storedBuyerPin = String(activeBuyer.password || "").trim();
+      if (!/^\d{4}$/.test(providedPin)) {
+        return {
+          ok: false,
+          forbidden: true,
+          error:
+            "Ingresa tu PIN personal de 4 números para autorizar el pago desde tu Libreta.",
+        };
+      }
+      if (!storedBuyerPin || storedBuyerPin !== providedPin) {
+        return {
+          ok: false,
+          forbidden: true,
+          error:
+            "PIN incorrecto. Verifica tu clave de 4 números antes de autorizar el pago.",
+        };
+      }
     }
 
     const unitPrice = Number(product.price_motes);
@@ -2607,7 +2738,7 @@ export class SupabaseEcoBancoRepository {
 
     return {
       authorized: true,
-      rider: riderRow ? mapRiderRow(riderRow, true) : null,
+      rider: riderRow ? await mapRiderRowWithSignedDocs(riderRow, true) : null,
       deliveries: filteredDeliveries,
       orders: filteredOrders,
     };
@@ -2685,7 +2816,7 @@ export class SupabaseEcoBancoRepository {
 
     return {
       ok: true,
-      rider: mapRiderRow(found, true),
+      rider: await mapRiderRowWithSignedDocs(found, true),
     };
   }
 
@@ -2777,25 +2908,51 @@ export class SupabaseEcoBancoRepository {
 
     const riderId = `rid-${Date.now()}`;
 
-    const resolvedSelfieUrl = cleanSelfie.startsWith("data:")
-      ? (
-          await uploadImageToStorage(
-            SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
-            cleanSelfie,
-            `${riderId}-selfie`
-          )
-        ).publicUrl
-      : cleanSelfie;
+    let resolvedSelfieRef = cleanSelfie;
+    if (cleanSelfie.startsWith("data:")) {
+      const up = await uploadImageToStorage(
+        SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
+        cleanSelfie,
+        `${riderId}-selfie`
+      );
+      resolvedSelfieRef =
+        up.storageRef ||
+        toPrivateStorageRef(SUPABASE_BUCKETS.RIDER_VERIFICATIONS, up.path);
+    } else {
+      const existingPath = extractPrivateObjectPath(
+        SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
+        cleanSelfie
+      );
+      if (existingPath) {
+        resolvedSelfieRef = toPrivateStorageRef(
+          SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
+          existingPath
+        );
+      }
+    }
 
-    const resolvedCiPhotoUrl = cleanCiPhoto.startsWith("data:")
-      ? (
-          await uploadImageToStorage(
-            SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
-            cleanCiPhoto,
-            `${riderId}-ci`
-          )
-        ).publicUrl
-      : cleanCiPhoto;
+    let resolvedCiPhotoRef = cleanCiPhoto;
+    if (cleanCiPhoto.startsWith("data:")) {
+      const up = await uploadImageToStorage(
+        SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
+        cleanCiPhoto,
+        `${riderId}-ci`
+      );
+      resolvedCiPhotoRef =
+        up.storageRef ||
+        toPrivateStorageRef(SUPABASE_BUCKETS.RIDER_VERIFICATIONS, up.path);
+    } else {
+      const existingPath = extractPrivateObjectPath(
+        SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
+        cleanCiPhoto
+      );
+      if (existingPath) {
+        resolvedCiPhotoRef = toPrivateStorageRef(
+          SUPABASE_BUCKETS.RIDER_VERIFICATIONS,
+          existingPath
+        );
+      }
+    }
 
     const riderInviteCode = generateUniqueRiderInviteCode(users);
 
@@ -2808,7 +2965,7 @@ export class SupabaseEcoBancoRepository {
       address: cleanAddress,
       delivery_address: cleanAddress,
       schedule: "",
-      avatar_url: resolvedSelfieUrl,
+      avatar_url: "",
       profile_completed: true,
       phone: cleanPhone,
       password: cleanPin,
@@ -2829,8 +2986,8 @@ export class SupabaseEcoBancoRepository {
       motes_earned: 0,
       free_deliveries_earned: 0,
       ci_number: cleanCi,
-      selfie_url: resolvedSelfieUrl,
-      ci_photo_url: resolvedCiPhotoUrl,
+      selfie_url: resolvedSelfieRef,
+      ci_photo_url: resolvedCiPhotoRef,
       rider_verified: true,
       rider_invite_code: riderInviteCode,
       pollar_user_id: cleanPollarUserId,
@@ -2841,7 +2998,7 @@ export class SupabaseEcoBancoRepository {
     const created = await supabaseTables.insertUser(newRiderRow);
     return {
       ok: true,
-      rider: mapRiderRow(created, true),
+      rider: await mapRiderRowWithSignedDocs(created, true),
     };
   }
 

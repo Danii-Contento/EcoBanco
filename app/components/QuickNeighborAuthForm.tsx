@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { CheckCircle2, Phone, ShieldCheck, User as UserIcon, X } from "lucide-react";
+import { CheckCircle2, Lock, Phone, ShieldCheck, User as UserIcon, X } from "lucide-react";
 import { sanitizeUserError } from "@/app/lib/friendlyCopy";
 import {
   formatBolivianPhoneDisplay,
@@ -77,7 +77,7 @@ export function BolivianPhoneField({
       <p className="text-xs font-semibold text-ink-muted dark:text-arena/75">
         {isComplete
           ? `✓ Listo: ${formatBolivianPhoneDisplay(localDigits)}`
-          : helperText || "Solo los 8 dígitos de tu celular en Bolivia (sin clave ni correo)."}
+          : helperText || "Solo los 8 dígitos de tu celular en Bolivia (sin correo)."}
       </p>
     </div>
   );
@@ -98,13 +98,13 @@ interface QuickNeighborAuthFormProps {
 }
 
 /**
- * Acceso ultrarrápido para vecinos: pide únicamente Nombre o apodo y WhatsApp (8 dígitos).
+ * Acceso rápido y protegido para vecinos: Nombre o apodo, WhatsApp (8 dígitos) y PIN de 4 números.
  */
 export function QuickNeighborAuthForm({
   initialName = "",
   initialPhone = "",
-  title = "Entra en 5 segundos",
-  subtitle = "Solo dinos cómo te llamas y tu WhatsApp de 8 dígitos. Sin contraseñas ni correo.",
+  title = "Entra en 10 segundos",
+  subtitle = "Ingresa tu nombre, tu WhatsApp de 8 dígitos y un PIN personal de 4 números para proteger tu saldo.",
   submitLabel = "Continuar ahora →",
   pollarDraft,
   onAuthenticated,
@@ -114,6 +114,7 @@ export function QuickNeighborAuthForm({
   const [phoneDigits, setPhoneDigits] = useState<string>(() =>
     sanitizeLocalPhoneInput(initialPhone)
   );
+  const [pinInput, setPinInput] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -133,6 +134,12 @@ export function QuickNeighborAuthForm({
       return;
     }
 
+    const cleanPin = pinInput.replace(/\D/g, "").slice(0, 4);
+    if (cleanPin.length !== 4) {
+      setError("Ingresa tu PIN personal de 4 números para proteger tu libreta.");
+      return;
+    }
+
     try {
       setIsSubmitting(true);
       const res = await fetch("/api/users", {
@@ -142,6 +149,7 @@ export function QuickNeighborAuthForm({
           action: "quick_neighbor_login",
           name: cleanName,
           phone: normalizedPhone,
+          pin: cleanPin,
           pollar_user_id: pollarDraft?.pollarUserId || undefined,
           stellar_address: pollarDraft?.stellarAddress || undefined,
         }),
@@ -164,7 +172,7 @@ export function QuickNeighborAuthForm({
       <div className="space-y-1">
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 dark:bg-brote/20 text-primary dark:text-[#69D86E] text-xs font-extrabold uppercase tracking-wide">
           <ShieldCheck className="w-4 h-4 shrink-0" aria-hidden="true" />
-          <span>Sin contraseña ni correo</span>
+          <span>WhatsApp + PIN de 4 números</span>
         </div>
         <h2 className="font-brand text-2xl text-ink dark:text-arena leading-tight">
           {title}
@@ -213,6 +221,38 @@ export function QuickNeighborAuthForm({
         value={phoneDigits}
         onChange={setPhoneDigits}
       />
+
+      <div className="space-y-1.5">
+        <label
+          htmlFor="quick-neighbor-pin"
+          className="block text-xs font-extrabold uppercase tracking-wide text-ink dark:text-arena"
+        >
+          Tu PIN secreto de 4 números *
+        </label>
+        <div className="flex items-center rounded-2xl border-2 border-earth-border dark:border-oro/45 bg-surface dark:bg-[#0D1714] focus-within:border-primary dark:focus-within:border-brillo px-3.5 transition-colors">
+          <Lock
+            className="w-5 h-5 text-ink-muted dark:text-brillo shrink-0 mr-2.5"
+            aria-hidden="true"
+          />
+          <input
+            id="quick-neighbor-pin"
+            type="password"
+            inputMode="numeric"
+            maxLength={4}
+            required
+            value={pinInput}
+            onChange={(e) =>
+              setPinInput(e.target.value.replace(/\D/g, "").slice(0, 4))
+            }
+            placeholder="Ej. 1234"
+            className="flex-1 min-w-0 min-h-[52px] bg-transparent text-base sm:text-lg font-extrabold tracking-[0.3em] text-ink dark:text-arena placeholder:tracking-normal placeholder:font-semibold placeholder:text-ink-muted/60 focus:outline-none"
+          />
+        </div>
+        <p className="text-xs font-semibold text-ink-muted dark:text-arena/75">
+          Si es tu primera vez, elige 4 números para proteger tu saldo. Si ya
+          tienes cuenta, escribe tu PIN.
+        </p>
+      </div>
 
       <div className="space-y-2 pt-1">
         <button

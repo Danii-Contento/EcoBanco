@@ -32,6 +32,8 @@ export async function POST(request: NextRequest) {
       pollarPaymentTxHash,
       quantity,
       specialNotes,
+      buyerPin,
+      pin,
     } = body;
 
     if (action === "release") {
@@ -152,6 +154,12 @@ export async function POST(request: NextRequest) {
       {
         quantity: quantity !== undefined ? Number(quantity) : 1,
         specialNotes: specialNotes ? String(specialNotes) : undefined,
+        buyerPin:
+          buyerPin !== undefined
+            ? String(buyerPin)
+            : pin !== undefined
+            ? String(pin)
+            : undefined,
       }
     );
     const state = await db.getState(session);
@@ -169,7 +177,7 @@ export async function POST(request: NextRequest) {
             buyer: state.buyer,
             merchant: state.merchant,
           },
-          { status: 400 }
+          { status: result.forbidden ? 403 : 400 }
         )
       );
     }
