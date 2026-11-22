@@ -203,6 +203,14 @@ const OPEN_RAMP_STATES = new Set<RampOrder["state"]>([
 
 const QUICK_TOPUP_AMOUNTS_BS = [20, 50, 100, 200] as const;
 
+const IS_POLLAR_TESTNET =
+  (process.env.NEXT_PUBLIC_STELLAR_NETWORK || "testnet")
+    .trim()
+    .toLowerCase() !== "mainnet" ||
+  (process.env.NEXT_PUBLIC_POLLAR_PUBLISHABLE_KEY || "")
+    .trim()
+    .startsWith("pub_testnet_");
+
 function createQrOrderRef(): string {
   return `ECO${Date.now().toString(36).toUpperCase()}${Math.random()
     .toString(36)
@@ -435,24 +443,49 @@ export function BankQrRechargeModal({
     }
   }, [client, confirmCompletedOrder]);
 
-  // Detecta si existen rutas fiat en vivo o si corresponde mostrar el QR de prueba en Testnet
+  // Detecta si existen rutas fiat en vivo para Bolivia (BO/BOB -> USDC) o muestra el QR comunitario en Testnet
   useEffect(() => {
     if (!open || !isPollarAuthenticated || !walletReady) {
       return;
     }
+    if (!IS_POLLAR_TESTNET) {
+      setRampRouteMode("live_ramp");
+      return;
+    }
+
     let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     setRampRouteMode("checking");
 
     const checkRoutes = async () => {
       try {
-        const res = await client.getRampRoutes("ONRAMP");
+        const timeoutPromise = new Promise<null>((resolve) => {
+          timeoutId = setTimeout(() => resolve(null), 3500);
+        });
+        const res = await Promise.race([
+          client.getRampRoutes("ONRAMP"),
+          timeoutPromise,
+        ]);
         if (cancelled) return;
-        const routes = Array.isArray(res?.routes) ? res.routes : [];
-        setRampRouteMode(routes.length > 0 ? "live_ramp" : "testnet_qr");
+        if (!res) {
+          setRampRouteMode("testnet_qr");
+          return;
+        }
+        const routes = Array.isArray(res.routes) ? res.routes : [];
+        const hasBoliviaUsdcRoute = routes.some(
+          (r) =>
+            r?.fiat?.country?.toUpperCase() === "BO" &&
+            r?.fiat?.currency?.toUpperCase() === "BOB" &&
+            r?.asset?.code?.toUpperCase() === "USDC" &&
+            r?.asset?.chain === "STELLAR"
+        );
+        setRampRouteMode(hasBoliviaUsdcRoute ? "live_ramp" : "testnet_qr");
       } catch {
         if (!cancelled) {
           setRampRouteMode("testnet_qr");
         }
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
       }
     };
 
@@ -460,6 +493,7 @@ export function BankQrRechargeModal({
 
     return () => {
       cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [open, isPollarAuthenticated, walletReady, client]);
 
