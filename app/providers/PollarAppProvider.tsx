@@ -9,6 +9,7 @@ const POLLAR_PUBLISHABLE_KEY = (
   process.env.NEXT_PUBLIC_POLLAR_PUBLISHABLE_KEY || ""
 ).trim();
 const POLLAR_API_URL = (process.env.NEXT_PUBLIC_POLLAR_API_URL || "").trim();
+const POLLAR_OAUTH_CALLBACK_PATH = "/auth/callback";
 
 export function PollarAppProvider({
   children,
@@ -26,10 +27,16 @@ export function PollarAppProvider({
       );
     }
 
+    const oauthRedirectUri =
+      typeof window !== "undefined" && window.location?.origin
+        ? `${window.location.origin}${POLLAR_OAUTH_CALLBACK_PATH}`
+        : undefined;
+
     return {
       apiKey: POLLAR_PUBLISHABLE_KEY,
       stellarNetwork: "testnet",
       ...(POLLAR_API_URL ? { baseUrl: POLLAR_API_URL } : {}),
+      ...(oauthRedirectUri ? { oauthRedirectUri } : {}),
       locale: "es",
     };
   }, []);

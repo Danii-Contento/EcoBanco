@@ -105,7 +105,8 @@ Esta sección está dirigida exclusivamente al equipo técnico de despliegue y a
    cp .env.example .env.local
    ```
 2. Completa todas las variables requeridas en `.env.local` (Supabase URL/keys, `STELLAR_TREASURY_PUBLIC`, `STELLAR_TREASURY_SECRET`, `NEXT_PUBLIC_POLLAR_PUBLISHABLE_KEY` con prefijo `pub_testnet_` y `TRUSTLESS_WORK_API_KEY`).
-3. Ejecuta el archivo completo [`supabase/schema.sql`](supabase/schema.sql) en el **SQL Editor** de tu proyecto Supabase. El script es idempotente, crea y actualiza las 5 tablas base (`users`, `products`, `orders`, `deliveries`, `ramp_transactions`), configura los buckets de Storage y recarga el caché de PostgREST.
+3. En el panel de **Pollar** (Testnet), registra los **Allowed Origins** (`http://localhost:3000` y `https://<tu-dominio>`) y las **Redirect URIs** (`http://localhost:3000/auth/callback` y `https://<tu-dominio>/auth/callback`) para el acceso con Google.
+4. Ejecuta el archivo completo [`supabase/schema.sql`](supabase/schema.sql) en el **SQL Editor** de tu proyecto Supabase. El script es idempotente, crea y actualiza las 5 tablas base (`users`, `products`, `orders`, `deliveries`, `ramp_transactions`), configura los buckets de Storage y recarga el caché de PostgREST.
 
 ### Scripts de auditoría y verificación
 

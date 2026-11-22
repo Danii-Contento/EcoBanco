@@ -60,18 +60,21 @@ Resumen: 12 PASS · 1 WARN · 0 FAIL
 
 ### C. Pendientes Manuales en Paneles Externos
 
-1. **Orígenes permitidos en Pollar (`ORIGIN_NOT_ALLOWED`)**: Al consultar `/v3/swap/config` con `Origin: http://localhost:3000`, el SDK API de Pollar respondió HTTP `403 ORIGIN_NOT_ALLOWED`. La llave `pub_testnet_...` y el servicio `/health` (`HTTP 200`) están activos; agrega `http://localhost:3000` y tu dominio de producción en **Allowed Origins** dentro del panel de Pollar.
+1. **Orígenes permitidos y Redirect URIs en Pollar (`ORIGIN_NOT_ALLOWED` / `APPLICATION_HAS_NO_REDIRECT_URIS`)**: Al consultar `/v3/swap/config` con `Origin: http://localhost:3000`, el SDK API de Pollar respondió HTTP `403 ORIGIN_NOT_ALLOWED`, y el acceso con Google (`/v3/auth/google`) requiere tener registradas las **Redirect URIs** del proyecto. La llave `pub_testnet_...` y el servicio `/health` (`HTTP 200`) están activos; agrega ambos campos en el panel de Pollar (ver Paso 1).
 2. **Dos filas legacy en `users` sin prefijo `+591`**: Son compatibles con el login actual mediante `areSameBolivianPhone`.
 
 ---
 
 ## 3. Pasos Exactos para Actualizar GitHub y el Dominio
 
-### Paso 1 — Autorizar orígenes en el Dashboard de Pollar
+### Paso 1 — Configurar orígenes y redirección en el Dashboard de Pollar
 1. Inicia sesión en tu panel de **Pollar** con tu proyecto Testnet (`NEXT_PUBLIC_POLLAR_PUBLISHABLE_KEY`).
-2. En **Allowed Origins**, agrega:
+2. En **Allowed Origins**, agrega (sin `/` al final):
    - `http://localhost:3000`
    - `https://<tu-proyecto>.vercel.app` y tu dominio personalizado.
+3. En **Redirect URIs**, agrega:
+   - `http://localhost:3000/auth/callback`
+   - `https://<tu-proyecto>.vercel.app/auth/callback` y `https://<tu-dominio-personalizado>/auth/callback`.
 
 ### Paso 2 — Verificar Variables de Entorno en Vercel
 En **Vercel → Project Settings → Environment Variables**, verifica que estén configuradas las 4 secciones de `.env.example` (usando únicamente claves de **Stellar Testnet**, sin variables de WhatsApp):
