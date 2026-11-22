@@ -1,12 +1,15 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import QRCode from "qrcode";
 import { RampWidget, usePollar } from "@pollar/react";
 import type { RampOrder } from "@pollar/core";
 import {
   ensurePollarWalletAndSync,
   ensurePollarWalletProvisioned,
   extractCompletedRampOrder,
+  extractPollarUserId,
+  payWithPollarWallet,
 } from "@/app/lib/pollarWallet";
 import {
   COMMUNITY_COPY,
@@ -198,6 +201,15 @@ const OPEN_RAMP_STATES = new Set<RampOrder["state"]>([
   "settling_onchain",
 ]);
 
+const QUICK_TOPUP_AMOUNTS_BS = [20, 50, 100, 200] as const;
+
+function createQrOrderRef(): string {
+  return `ECO${Date.now().toString(36).toUpperCase()}${Math.random()
+    .toString(36)
+    .slice(2, 6)
+    .toUpperCase()}`;
+}
+
 export function BankQrRechargeModal({
   open,
   role,
@@ -222,6 +234,26 @@ export function BankQrRechargeModal({
   const [walletReady, setWalletReady] = useState<boolean>(false);
   const [walletError, setWalletError] = useState<string | null>(null);
   const [isConfirmingOrder, setIsConfirmingOrder] = useState<boolean>(false);
+  const [rampRouteMode, setRampRouteMode] = useState<
+    "checking" | "live_ramp" | "testnet_qr"
+  >("checking");
+
+  const isSubscriptionPurpose =
+    purpose === "merchant_premium" || purpose === "prosumer_subscription";
+  const initialSanitizedAmountBs = isSubscriptionPurpose
+    ? Math.max(100, Math.round(amountBs))
+    : Math.min(500, Math.max(1, Math.round(amountBs)));
+
+  const [selectedAmountBs, setSelectedAmountBs] = useState<number>(
+    initialSanitizedAmountBs
+  );
+  const [orderRef, setOrderRef] = useState<string>(() => createQrOrderRef());
+  const [qrDataUrl, setQrDataUrl] = useState<string>("");
+  const [isSubmittingTestnetQr, setIsSubmittingTestnetQr] =
+    useState<boolean>(false);
+  const [testnetSubmitError, setTestnetSubmitError] = useState<string | null>(
+    null
+  );
 
   const initialCompletedIdsRef = useRef<Set<string>>(new Set());
   const initialOpenIdsRef = useRef<Set<string>>(new Set());
@@ -275,19 +307,27 @@ export function BankQrRechargeModal({
     if (!open) {
       setWalletReady(false);
       setWalletError(null);
+      setRampRouteMode("checking");
+      setQrDataUrl("");
+      setIsSubmittingTestnetQr(false);
+      setTestnetSubmitError(null);
       snapshotLoadedRef.current = false;
       initialCompletedIdsRef.current.clear();
       initialOpenIdsRef.current.clear();
       return;
     }
 
+    setRampRouteMode("checking");
+    setSelectedAmountBs(initialSanitizedAmountBs);
+    setOrderRef(createQrOrderRef());
+    setTestnetSubmitError(null);
     openedAtRef.current = Date.now();
     if (isPollarAuthenticated) {
       void prepareWalletForRamp();
     } else {
       setWalletReady(false);
     }
-  }, [open, isPollarAuthenticated, prepareWalletForRamp]);
+  }, [open, isPollarAuthenticated, prepareWalletForRamp, initialSanitizedAmountBs]);
 
   const confirmCompletedOrder = useCallback(
     async (order: RampOrder): Promise<boolean> => {
@@ -395,9 +435,71 @@ export function BankQrRechargeModal({
     }
   }, [client, confirmCompletedOrder]);
 
-  // Toma snapshot inicial al montar el generador QR y sondea nuevas recargas completadas
+  // Detecta si existen rutas fiat en vivo o si corresponde mostrar el QR de prueba en Testnet
   useEffect(() => {
-    if (!open || !isPollarAuthenticated || !walletReady) return;
+    if (!open || !isPollarAuthenticated || !walletReady) {
+      return;
+    }
+    let cancelled = false;
+    setRampRouteMode("checking");
+
+    const checkRoutes = async () => {
+      try {
+        const res = await client.getRampRoutes("ONRAMP");
+        if (cancelled) return;
+        const routes = Array.isArray(res?.routes) ? res.routes : [];
+        setRampRouteMode(routes.length > 0 ? "live_ramp" : "testnet_qr");
+      } catch {
+        if (!cancelled) {
+          setRampRouteMode("testnet_qr");
+        }
+      }
+    };
+
+    void checkRoutes();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, isPollarAuthenticated, walletReady, client]);
+
+  // Genera imagen QR comunitaria cuando está activo el flujo QR de Testnet
+  useEffect(() => {
+    if (!open || rampRouteMode !== "testnet_qr") return;
+    const validBs =
+      Number.isFinite(selectedAmountBs) && selectedAmountBs >= 1
+        ? Math.min(500, Math.round(selectedAmountBs))
+        : 1;
+    let cancelled = false;
+
+    const payload = `ECOBANCO-BO|REF:${orderRef}|MONTO:${validBs}BS|COMISION:0BS`;
+    void QRCode.toDataURL(payload, {
+      width: 240,
+      margin: 2,
+      color: { dark: "#132A1E", light: "#FFFFFF" },
+    })
+      .then((url) => {
+        if (!cancelled) setQrDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setQrDataUrl("");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, rampRouteMode, orderRef, selectedAmountBs]);
+
+  // Toma snapshot inicial al montar el generador QR en vivo y sondea nuevas recargas completadas
+  useEffect(() => {
+    if (
+      !open ||
+      !isPollarAuthenticated ||
+      !walletReady ||
+      rampRouteMode !== "live_ramp"
+    ) {
+      return;
+    }
     let cancelled = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -431,18 +533,29 @@ export function BankQrRechargeModal({
       cancelled = true;
       if (pollTimer) clearInterval(pollTimer);
     };
-  }, [open, isPollarAuthenticated, walletReady, client, checkRampOrdersNow]);
+  }, [
+    open,
+    isPollarAuthenticated,
+    walletReady,
+    rampRouteMode,
+    client,
+    checkRampOrdersNow,
+  ]);
 
-  // Adaptación visual comunitaria sobre los diálogos de ingreso y generación de QR
+  // Adaptación visual comunitaria sobre los diálogos de ingreso y generación de QR en vivo
   useEffect(() => {
     if (!open || typeof document === "undefined") {
       return;
     }
 
-    const isRampVisible = isPollarAuthenticated && walletReady;
-    if (isRampVisible) {
-      document.body.classList.add("ecobanco-qr-ramp-active");
+    const isLiveRampVisible =
+      isPollarAuthenticated && walletReady && rampRouteMode === "live_ramp";
+    if (!isLiveRampVisible) {
+      document.body.classList.remove("ecobanco-qr-ramp-active");
+      return;
     }
+
+    document.body.classList.add("ecobanco-qr-ramp-active");
 
     const applyEnhancements = () => enhanceRechargeModalDom(subtitle);
     const rafId = window.requestAnimationFrame(applyEnhancements);
@@ -461,7 +574,7 @@ export function BankQrRechargeModal({
       observer.disconnect();
       document.body.classList.remove("ecobanco-qr-ramp-active");
     };
-  }, [open, isPollarAuthenticated, walletReady, subtitle]);
+  }, [open, isPollarAuthenticated, walletReady, rampRouteMode, subtitle]);
 
   const handleWidgetClose = async () => {
     if (snapshotLoadedRef.current) {
@@ -475,6 +588,105 @@ export function BankQrRechargeModal({
       }
     }
     onClose();
+  };
+
+  const handleSelectQuickAmount = (bs: number) => {
+    setSelectedAmountBs(bs);
+    setOrderRef(createQrOrderRef());
+    setTestnetSubmitError(null);
+  };
+
+  const handleCustomAmountChange = (raw: string) => {
+    const numeric = Number(raw);
+    if (!raw.trim()) {
+      setSelectedAmountBs(0);
+      setTestnetSubmitError(null);
+      return;
+    }
+    if (Number.isFinite(numeric)) {
+      setSelectedAmountBs(Math.min(500, Math.max(0, Math.round(numeric))));
+      setOrderRef(createQrOrderRef());
+      setTestnetSubmitError(null);
+    }
+  };
+
+  const handleDownloadTestnetQr = () => {
+    if (!qrDataUrl) return;
+    const link = document.createElement("a");
+    link.href = qrDataUrl;
+    link.download = `ecobanco-qr-${Math.max(1, Math.round(selectedAmountBs))}bs.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleConfirmTestnetQrTransfer = async () => {
+    const roundedBs = Math.round(Number(selectedAmountBs));
+    if (!Number.isFinite(roundedBs) || roundedBs < 1 || roundedBs > 500) {
+      setTestnetSubmitError("Ingresa un monto válido entre 1 Bs y 500 Bs.");
+      return;
+    }
+
+    const stellarAddress = client.getWallet()?.address?.trim() || "";
+    const pollarUserId = extractPollarUserId(client);
+    if (!stellarAddress) {
+      setTestnetSubmitError(COMMUNITY_COPY.walletPreparingError);
+      return;
+    }
+
+    setIsSubmittingTestnetQr(true);
+    setTestnetSubmitError(null);
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "testnet_qr_topup",
+          role,
+          purpose,
+          amountBs: roundedBs,
+          orderRef,
+          pollar_user_id: pollarUserId,
+          stellar_address: stellarAddress,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        const cleanErr = sanitizeUserError(data.error);
+        setTestnetSubmitError(cleanErr);
+        onErrorRef.current?.(cleanErr);
+        return;
+      }
+
+      await client.refreshBalance().catch(() => undefined);
+
+      if (isSubscriptionPurpose && data.treasuryPublic) {
+        await payWithPollarWallet(client, {
+          destination: String(data.treasuryPublic),
+          amountUsdc: roundedBs,
+          memo:
+            purpose === "merchant_premium" ? "CASERITA ALIADA" : "CLUB VECINO",
+          waitForBalanceMs: 2000,
+        }).catch(() => undefined);
+      }
+
+      onCreditedRef.current?.({
+        pollarOrderId: String(data.pollarOrderId || orderRef),
+        creditedBs: Number(data.creditedBs ?? roundedBs),
+        message:
+          translateBackendMessage(data.message) ||
+          `¡Recarga de ${roundedBs} Bs sumada a tu libreta comunitaria!`,
+        buyer: data.buyer,
+        merchant: data.merchant,
+      });
+    } catch (err) {
+      const cleanErr = sanitizeUserError(err);
+      setTestnetSubmitError(cleanErr);
+      onErrorRef.current?.(cleanErr);
+    } finally {
+      setIsSubmittingTestnetQr(false);
+    }
   };
 
   if (!open) return null;
@@ -565,6 +777,196 @@ export function BankQrRechargeModal({
           >
             Cerrar
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (rampRouteMode === "checking") {
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+      >
+        <div className="max-w-md w-full rounded-2xl eco-card-gold p-6 space-y-4 shadow-gold-glow text-center">
+          <div className="text-4xl">📲</div>
+          <h3 className="font-brand text-2xl eco-text">
+            Preparando tu código QR...
+          </h3>
+          <p className="text-sm eco-text-muted leading-relaxed">
+            Estamos preparando el código QR en Bolivianos (Bs) para que puedas pagar desde tu banco.
+          </p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full py-2 text-sm font-bold eco-text-muted hover:eco-text"
+          >
+            Cerrar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (rampRouteMode === "testnet_qr") {
+    const canSubmitQr =
+      !isSubmittingTestnetQr &&
+      Number.isFinite(selectedAmountBs) &&
+      selectedAmountBs >= 1 &&
+      selectedAmountBs <= 500;
+
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Recargar con QR de tu Banco"
+        className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+      >
+        <div className="max-w-md w-full rounded-3xl bg-surface dark:bg-[#182822] border-2 border-earth-border dark:border-oro/45 p-5 sm:p-6 space-y-4 shadow-warm-lg dark:shadow-gold-glow my-auto">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <h3 className="font-brand text-2xl text-ink dark:text-arena leading-tight">
+                Recargar con QR de tu Banco
+              </h3>
+              <p className="text-xs sm:text-sm text-ink-muted dark:text-arena/80 leading-relaxed">
+                {subtitle}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isSubmittingTestnetQr}
+              aria-label="Cerrar"
+              className="w-10 h-10 rounded-full bg-surface-soft dark:bg-bosque text-ink dark:text-arena font-bold text-base flex items-center justify-center shrink-0 hover:bg-earth-border/60 transition disabled:opacity-50"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="rounded-xl bg-primary/10 dark:bg-brote/15 border border-primary/30 dark:border-brote/40 px-3.5 py-2 text-center text-xs sm:text-sm font-extrabold text-primary dark:text-[#69D86E]">
+            🛡️ Comisión: 0 Bs — Cubierta por EcoBanco
+          </div>
+
+          {isSubscriptionPurpose ? (
+            <div className="rounded-2xl bg-surface-soft dark:bg-[#14221D] border border-earth-border dark:border-oro/30 px-4 py-3 text-center">
+              <span className="block text-xs font-bold uppercase tracking-wide text-ink-muted dark:text-arena/75">
+                Monto exacto para activar tu plan
+              </span>
+              <span className="font-brand text-3xl text-ink dark:text-brillo">
+                {selectedAmountBs} Bs
+              </span>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              <label
+                htmlFor="ecobanco-qr-amount-bs"
+                className="block text-xs font-extrabold uppercase tracking-wide text-ink-muted dark:text-arena/80"
+              >
+                Monto en Bolivianos (Bs)
+              </label>
+
+              <div className="grid grid-cols-4 gap-2">
+                {QUICK_TOPUP_AMOUNTS_BS.map((preset) => {
+                  const isActive = selectedAmountBs === preset;
+                  return (
+                    <button
+                      key={preset}
+                      type="button"
+                      disabled={isSubmittingTestnetQr}
+                      onClick={() => handleSelectQuickAmount(preset)}
+                      className={`min-h-[48px] rounded-xl text-xs sm:text-sm font-extrabold border transition active:scale-95 ${
+                        isActive
+                          ? "bg-primary text-white border-primary dark:bg-brote dark:text-bosque dark:border-brote shadow-sm"
+                          : "bg-surface-soft dark:bg-[#14221D] text-ink dark:text-arena border-earth-border dark:border-oro/30 hover:border-sol"
+                      }`}
+                    >
+                      {preset} Bs
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex items-center gap-2 rounded-2xl bg-surface-soft dark:bg-[#14221D] border border-earth-border dark:border-oro/30 px-3.5 py-2">
+                <input
+                  id="ecobanco-qr-amount-bs"
+                  type="number"
+                  min={1}
+                  max={500}
+                  step={1}
+                  disabled={isSubmittingTestnetQr}
+                  value={selectedAmountBs > 0 ? selectedAmountBs : ""}
+                  onChange={(e) => handleCustomAmountChange(e.target.value)}
+                  className="w-full bg-transparent text-lg font-extrabold text-ink dark:text-arena focus:outline-none"
+                  placeholder="Ej. 50"
+                />
+                <span className="text-sm font-extrabold text-ink-muted dark:text-arena/80 shrink-0">
+                  Bs
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-2xl bg-white p-4 border-2 border-earth-border dark:border-oro/40 flex flex-col items-center gap-2.5">
+            {qrDataUrl ? (
+              <img
+                src={qrDataUrl}
+                alt="Código QR de recarga EcoBanco"
+                width={216}
+                height={216}
+                className="w-52 h-52 rounded-xl"
+              />
+            ) : (
+              <div className="w-52 h-52 rounded-xl bg-surface-soft flex items-center justify-center text-sm font-bold text-ink-muted">
+                Generando QR...
+              </div>
+            )}
+
+            <p className="text-xs font-bold text-[#1A2E23] text-center">
+              Referencia: {orderRef} · Escanea con la app de tu banco
+            </p>
+
+            <button
+              type="button"
+              onClick={handleDownloadTestnetQr}
+              disabled={!qrDataUrl || isSubmittingTestnetQr}
+              className="w-full min-h-[48px] px-4 py-2.5 rounded-xl bg-[#F4EFE6] hover:bg-[#EAE1D3] text-[#132A1E] font-extrabold text-sm border border-[#D8CBB8] transition active:scale-[0.98] disabled:opacity-50"
+            >
+              ⬇️ Descargar QR para mi Banco
+            </button>
+          </div>
+
+          {testnetSubmitError && (
+            <p className="rounded-xl bg-aji/10 border border-aji/40 px-3.5 py-2.5 text-xs sm:text-sm font-bold text-aji dark:bg-red-900/30 dark:border-red-400/50 dark:text-red-200 text-center">
+              ⚠️ {testnetSubmitError}
+            </p>
+          )}
+
+          <div className="space-y-2 pt-1">
+            <button
+              type="button"
+              disabled={!canSubmitQr}
+              onClick={() => void handleConfirmTestnetQrTransfer()}
+              className="w-full min-h-[52px] px-5 py-3.5 rounded-2xl bg-gradient-to-r from-oro via-brillo to-oro text-bosque font-brand text-base sm:text-lg shadow-gold-glow border border-[#fff3cc]/70 active:scale-[0.98] transition disabled:opacity-60"
+            >
+              {isSubmittingTestnetQr
+                ? "Validando tu transferencia bancaria..."
+                : "✅ Ya hice la transferencia"}
+            </button>
+
+            <p className="text-[11px] font-semibold text-ink-muted dark:text-arena/75 text-center">
+              Recibirás el 100% de tu saldo en Bs al instante en tu libreta comunitaria.
+            </p>
+
+            <button
+              type="button"
+              disabled={isSubmittingTestnetQr}
+              onClick={onClose}
+              className="w-full min-h-[48px] text-sm font-bold text-ink-muted dark:text-arena/80 hover:text-ink dark:hover:text-arena transition disabled:opacity-50"
+            >
+              Cerrar
+            </button>
+          </div>
         </div>
       </div>
     );

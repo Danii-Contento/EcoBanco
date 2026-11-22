@@ -27,6 +27,7 @@ import {
   deployAndFundMultiReleaseOrder,
   isValidSorobanContractId,
   recordPickupMilestoneEvidence,
+  sendTestnetUsdcFromTreasury,
 } from "./trustlessWork";
 
 export const SUBSCRIPTION_COST = 100; // 100 MOTES o 100 Bs en FIAT
@@ -43,11 +44,15 @@ const CLOSED_STORE_MARKER = "[[ECO_CLOSED]]";
 
 const globalRampStore = globalThis as unknown as {
   ecoBancoProcessedRampKeys?: Set<string>;
+  ecoBancoInFlightQrTopupKeys?: Set<string>;
   ecoBancoMerchantOpenOverrides?: Map<string, boolean>;
 };
 const processedRampKeys: Set<string> =
   globalRampStore.ecoBancoProcessedRampKeys ??
   (globalRampStore.ecoBancoProcessedRampKeys = new Set<string>());
+const inFlightQrTopupKeys: Set<string> =
+  globalRampStore.ecoBancoInFlightQrTopupKeys ??
+  (globalRampStore.ecoBancoInFlightQrTopupKeys = new Set<string>());
 const merchantOpenOverrides: Map<string, boolean> =
   globalRampStore.ecoBancoMerchantOpenOverrides ??
   (globalRampStore.ecoBancoMerchantOpenOverrides = new Map<string, boolean>());
@@ -136,7 +141,7 @@ function parseOrderProductMeta(
   };
 }
 
-async function verifyStellarTestnetTx(
+export async function verifyStellarTestnetTx(
   txHash: string
 ): Promise<{ verified: boolean; reason?: string }> {
   const cleanHash = txHash.trim();
@@ -1685,6 +1690,221 @@ export class SupabaseEcoBancoRepository {
           pollarOrderId: cleanOrderId,
           buyer: mapped,
         };
+  }
+
+  // Recarga QR de prueba en Stellar Testnet:
+  // Envía USDC reales desde Tesorería hacia la wallet Pollar (G...) del usuario,
+  // registra la orden en ramp_transactions y acredita el saldo / plan en EcoBanco.
+  public async executeTestnetQrTopup(
+    session: EcoBancoSession,
+    input: {
+      role?: "buyer" | "merchant";
+      purpose?: "fiat_topup" | "prosumer_subscription" | "merchant_premium";
+      amountBs: number;
+      orderRef: string;
+      pollarUserId?: string | null;
+      stellarAddress?: string | null;
+    }
+  ): Promise<{
+    ok: boolean;
+    duplicate?: boolean;
+    unauthorized?: boolean;
+    forbidden?: boolean;
+    error?: string;
+    creditedBs?: number;
+    pollarOrderId?: string;
+    onchainTxHash?: string;
+    treasuryPublic?: string;
+    buyer?: User;
+    merchant?: User | null;
+  }> {
+    if (
+      (process.env.NEXT_PUBLIC_STELLAR_NETWORK || "").trim().toLowerCase() ===
+      "mainnet"
+    ) {
+      return {
+        ok: false,
+        forbidden: true,
+        error:
+          "La recarga QR de prueba solo está disponible en Stellar Testnet.",
+      };
+    }
+
+    const purpose: "fiat_topup" | "prosumer_subscription" | "merchant_premium" =
+      input.purpose === "prosumer_subscription"
+        ? "prosumer_subscription"
+        : input.purpose === "merchant_premium"
+        ? "merchant_premium"
+        : "fiat_topup";
+
+    const targetRole: "buyer" | "merchant" =
+      purpose === "merchant_premium"
+        ? "merchant"
+        : purpose === "prosumer_subscription"
+        ? "buyer"
+        : input.role === "merchant"
+        ? "merchant"
+        : "buyer";
+
+    if (targetRole === "merchant" && !session.merchantId) {
+      return {
+        ok: false,
+        unauthorized: !session.buyerId && !session.riderId,
+        forbidden: Boolean(session.buyerId || session.riderId),
+        error:
+          "Debes iniciar sesión como caserita para completar esta recarga.",
+      };
+    }
+    if (targetRole === "buyer" && !session.buyerId) {
+      return {
+        ok: false,
+        unauthorized: !session.merchantId && !session.riderId,
+        forbidden: Boolean(session.merchantId || session.riderId),
+        error: "Debes iniciar sesión como vecino para completar esta recarga.",
+      };
+    }
+
+    const amount = Math.round(Number(input.amountBs) * 100) / 100;
+    if (!Number.isFinite(amount) || amount < 1 || amount > 500) {
+      return {
+        ok: false,
+        error:
+          "El monto de recarga en Testnet debe estar entre 1 Bs y 500 Bs.",
+      };
+    }
+
+    if (
+      (purpose === "prosumer_subscription" || purpose === "merchant_premium") &&
+      amount < SUBSCRIPTION_COST
+    ) {
+      return {
+        ok: false,
+        error: `El monto acreditado (${amount} Bs) es menor a los ${SUBSCRIPTION_COST} Bs requeridos para activar este plan.`,
+      };
+    }
+
+    const cleanStellarAddress = (input.stellarAddress || "").trim();
+    if (!STELLAR_CLASSIC_ACCOUNT_REGEX.test(cleanStellarAddress)) {
+      return {
+        ok: false,
+        error:
+          "Se requiere una billetera Stellar clásica (G...) verificada en Pollar para acreditar la recarga.",
+      };
+    }
+
+    const sanitizedRef = (input.orderRef || "")
+      .trim()
+      .replace(/[^A-Za-z0-9_-]/g, "")
+      .slice(0, 64);
+    const pollarOrderId = `tst-qr-${sanitizedRef || Date.now()}`;
+    if (!POLLAR_ORDER_ID_REGEX.test(pollarOrderId)) {
+      return {
+        ok: false,
+        error: "Referencia de orden QR inválida.",
+      };
+    }
+
+    const targetId =
+      targetRole === "merchant" ? session.merchantId! : session.buyerId!;
+    const users = await supabaseTables.listUsers();
+    const targetUser = users.find((u) =>
+      targetRole === "merchant"
+        ? u.role === "merchant" && u.id === targetId
+        : u.role === "buyer" && !isRiderUserRow(u) && u.id === targetId
+    );
+    if (!targetUser) {
+      return { ok: false, error: "Cuenta de EcoBanco no encontrada." };
+    }
+
+    const cleanPollarUserId = input.pollarUserId?.trim() || null;
+    if (
+      targetUser.stellar_address &&
+      targetUser.stellar_address !== cleanStellarAddress
+    ) {
+      return {
+        ok: false,
+        error:
+          "La billetera Stellar conectada no coincide con la cuenta vinculada a este perfil.",
+      };
+    }
+    if (
+      targetUser.pollar_user_id &&
+      cleanPollarUserId &&
+      targetUser.pollar_user_id !== cleanPollarUserId
+    ) {
+      return {
+        ok: false,
+        error:
+          "La sesión de Pollar no coincide con el usuario vinculado a este perfil.",
+      };
+    }
+
+    const walletConflict = users.find(
+      (u) =>
+        u.id !== targetUser.id &&
+        (u.stellar_address === cleanStellarAddress ||
+          (cleanPollarUserId && u.pollar_user_id === cleanPollarUserId))
+    );
+    if (walletConflict) {
+      return {
+        ok: false,
+        error: "Esta billetera ya está vinculada a otra cuenta.",
+      };
+    }
+
+    const orderKey = `order:${pollarOrderId}`;
+    if (processedRampKeys.has(orderKey) || inFlightQrTopupKeys.has(orderKey)) {
+      return {
+        ok: false,
+        duplicate: true,
+        error: "Esta orden de Pollar ya fue acreditada anteriormente.",
+      };
+    }
+
+    const existingLookup = await supabaseTables.findRampTransactionByOrderOrHash(
+      pollarOrderId,
+      null
+    );
+    if (existingLookup.existing) {
+      processedRampKeys.add(orderKey);
+      return {
+        ok: false,
+        duplicate: true,
+        error: "Esta orden de Pollar ya fue acreditada anteriormente.",
+      };
+    }
+
+    inFlightQrTopupKeys.add(orderKey);
+    try {
+      const transfer = await sendTestnetUsdcFromTreasury({
+        destination: cleanStellarAddress,
+        amountUsdc: amount,
+        memo: "ECOBANCO QR",
+      });
+
+      const credited = await this.confirmRampTopup(session, {
+        role: targetRole,
+        purpose,
+        pollarOrderId,
+        direction: "ONRAMP",
+        orderState: "completed",
+        amountBs: amount,
+        fiatCurrency: "BOB",
+        assetCode: "USDC",
+        cryptoAmount: amount,
+        onchainTxHash: transfer.txHash,
+        pollarUserId: cleanPollarUserId,
+        stellarAddress: cleanStellarAddress,
+      });
+
+      return {
+        ...credited,
+        onchainTxHash: transfer.txHash,
+        treasuryPublic: transfer.source,
+      };
+    } finally {
+      inFlightQrTopupKeys.delete(orderKey);
+    }
   }
 
   // Suscripción Prosumidor (100 Bs/mes):

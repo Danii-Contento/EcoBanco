@@ -392,6 +392,146 @@ export interface PollarSignXdrResult {
   reason?: string;
 }
 
+export interface PollarPaymentResult {
+  paid: boolean;
+  txHash?: string;
+  amountUsdc?: number;
+  signerAddress?: string;
+  availableUsdc?: number;
+  reason?: string;
+}
+
+async function readStellarUsdcAvailable(client: PollarClient): Promise<number> {
+  await client.refreshBalance().catch(() => undefined);
+  const balState = client.getWalletBalanceState();
+  if (balState.step !== "loaded") return 0;
+
+  const usdcRecord = balState.data.balances.find(
+    (b) =>
+      b.code.toUpperCase() === STELLAR_TESTNET_USDC.code &&
+      (!b.chain || b.chain === "STELLAR")
+  );
+  if (!usdcRecord) return 0;
+
+  const raw = Number(usdcRecord.available ?? usdcRecord.balance ?? 0);
+  return Number.isFinite(raw) ? raw : 0;
+}
+
+/**
+ * Ejecuta un pago real en USDC Testnet firmado por la wallet Pollar del usuario.
+ * Nunca lanza excepciones para no bloquear flujos si el usuario no tiene saldo o sesión Pollar.
+ */
+export async function payWithPollarWallet(
+  client: PollarClient,
+  params: {
+    destination: string;
+    amountUsdc: number;
+    memo?: string;
+    waitForBalanceMs?: number;
+  }
+): Promise<PollarPaymentResult> {
+  const cleanDestination = (params.destination || "").trim();
+  const roundedAmount = Math.round(Number(params.amountUsdc) * 100) / 100;
+
+  if (!isValidClassicStellarAddress(cleanDestination)) {
+    return { paid: false, reason: "invalid_destination" };
+  }
+  if (!Number.isFinite(roundedAmount) || roundedAmount <= 0) {
+    return { paid: false, reason: "invalid_amount" };
+  }
+
+  const auth = client.getAuthState();
+  if (auth.step !== "authenticated") {
+    return { paid: false, reason: "pollar_not_authenticated" };
+  }
+
+  const wallet = client.getWallet();
+  const address = wallet?.address?.trim() || "";
+  if (
+    !address ||
+    address.startsWith("C") ||
+    wallet?.custody === "smart" ||
+    !isValidClassicStellarAddress(address)
+  ) {
+    return { paid: false, reason: "non_classic_or_passkey_c_address" };
+  }
+
+  if (address === cleanDestination) {
+    return { paid: false, reason: "same_source_and_destination" };
+  }
+
+  if (wallet?.provisioning && wallet.provisioning !== "READY") {
+    return { paid: false, reason: "wallet_not_ready" };
+  }
+
+  try {
+    let availableUsdc = await readStellarUsdcAvailable(client);
+    const waitMs = Math.min(2000, Math.max(0, Number(params.waitForBalanceMs ?? 0)));
+    if (availableUsdc < roundedAmount && waitMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      availableUsdc = await readStellarUsdcAvailable(client);
+    }
+
+    if (availableUsdc < roundedAmount) {
+      return {
+        paid: false,
+        signerAddress: address,
+        availableUsdc,
+        reason: "insufficient_pollar_usdc",
+      };
+    }
+
+    const cleanMemo = (params.memo || "").trim();
+    const outcome = await client.sendPayment({
+      chain: "STELLAR",
+      destination: cleanDestination,
+      amount: roundedAmount.toFixed(2),
+      asset: {
+        type: "credit_alphanum4",
+        code: STELLAR_TESTNET_USDC.code,
+        issuer: STELLAR_TESTNET_USDC.issuer,
+      },
+      ...(cleanMemo
+        ? {
+            options: {
+              memo: {
+                type: "text",
+                value: cleanMemo.slice(0, 28),
+              },
+            },
+          }
+        : {}),
+    });
+
+    if (outcome.status === "success" || outcome.status === "pending") {
+      await client.refreshBalance().catch(() => undefined);
+      return {
+        paid: true,
+        txHash: outcome.hash,
+        amountUsdc: roundedAmount,
+        signerAddress: address,
+        availableUsdc,
+      };
+    }
+
+    return {
+      paid: false,
+      signerAddress: address,
+      availableUsdc,
+      reason:
+        outcome.status === "error"
+          ? outcome.message || outcome.details || outcome.code || "payment_error"
+          : outcome.status,
+    };
+  } catch (err) {
+    return {
+      paid: false,
+      signerAddress: address,
+      reason: err instanceof Error ? err.message : "pollar_payment_error",
+    };
+  }
+}
+
 /**
  * Firma un XDR usando la cuenta custodial clásica G... de Pollar cuando el usuario
  * tiene sesión Pollar activa. Jamás ejecuta signTx sobre Passkeys (C-address).

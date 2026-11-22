@@ -406,7 +406,7 @@ async function checkPollarTestnet(env) {
   }
 
   try {
-    const res = await fetchWithTimeout(`${env.pollarApiUrl}/v3/swap/config`, {
+    const res = await fetchWithTimeout(`${env.pollarApiUrl}/v3/applications/config`, {
       method: "GET",
       headers: {
         "x-pollar-api-key": env.pollarKey,
@@ -417,11 +417,35 @@ async function checkPollarTestnet(env) {
     const rawBody = await res.text().catch(() => "");
 
     if (res.ok) {
-      addCheck(
-        "PASS",
-        "Pollar:TestnetAPI",
-        `Conectividad y llave pub_testnet_ verificadas en ${env.pollarApiUrl}/v3/swap/config (HTTP ${res.status}).`
-      );
+      let parsed = null;
+      try {
+        parsed = JSON.parse(rawBody);
+      } catch {
+        parsed = null;
+      }
+      const appInfo = parsed?.content?.application ?? null;
+      const network = String(appInfo?.network || "unknown").toLowerCase();
+      const chains = Array.isArray(appInfo?.chains)
+        ? appInfo.chains.join(", ")
+        : "desconocido";
+      const signMode =
+        appInfo?.signConfirmation?.mode ||
+        parsed?.content?.signConfirmation?.mode ||
+        "desconocido";
+
+      if (network === "mainnet") {
+        addCheck(
+          "FAIL",
+          "Pollar:TestnetAPI",
+          `La llave de Pollar responde en modo MAINNET en ${env.pollarApiUrl}/v3/applications/config; debe permanecer en Testnet.`
+        );
+      } else {
+        addCheck(
+          "PASS",
+          "Pollar:TestnetAPI",
+          `Conectividad y configuración verificadas en ${env.pollarApiUrl}/v3/applications/config (HTTP ${res.status}, network: ${network}, chains: [${chains}], signConfirmation.mode: ${signMode}).`
+        );
+      }
     } else if (res.status === 403 && rawBody.includes("ORIGIN_NOT_ALLOWED")) {
       addCheck(
         "WARN",
@@ -438,7 +462,7 @@ async function checkPollarTestnet(env) {
       addCheck(
         "WARN",
         "Pollar:TestnetAPI",
-        `Pollar API respondió HTTP ${res.status} en /v3/swap/config.`
+        `Pollar API respondió HTTP ${res.status} en /v3/applications/config.`
       );
     }
   } catch (err) {

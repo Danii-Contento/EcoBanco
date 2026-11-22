@@ -1,7 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applyNoStoreHeaders, readSession } from "@/app/lib/session";
-import { db } from "@/app/lib/store";
+import { db, verifyStellarTestnetTx } from "@/app/lib/store";
+import { getTreasuryPublicAddress } from "@/app/lib/trustlessWork";
 import { sanitizeUserError } from "@/app/lib/friendlyCopy";
+
+export async function GET() {
+  let operationalAccount: string | null = null;
+  try {
+    operationalAccount = getTreasuryPublicAddress();
+  } catch {
+    operationalAccount = null;
+  }
+  return applyNoStoreHeaders(
+    NextResponse.json({ operationalAccount }, { status: 200 })
+  );
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,6 +29,7 @@ export async function POST(request: NextRequest) {
       orderId,
       deliveryPin,
       preSignedDeployXdr,
+      pollarPaymentTxHash,
       quantity,
       specialNotes,
     } = body;
@@ -160,6 +174,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const cleanPollarPaymentTxHash =
+      typeof pollarPaymentTxHash === "string" ? pollarPaymentTxHash.trim() : "";
+    let pollarPaymentVerified: boolean | null = null;
+    if (/^[a-fA-F0-9]{64}$/.test(cleanPollarPaymentTxHash)) {
+      const check = await verifyStellarTestnetTx(
+        cleanPollarPaymentTxHash
+      ).catch(() => ({ verified: false }));
+      pollarPaymentVerified = check.verified;
+    }
+
     console.info("[EcoBanco Escrow Audit][DEPLOY_FUND_OK]", {
       orderId: result.order?.id ?? null,
       deliveryId: result.delivery?.id ?? null,
@@ -169,6 +193,8 @@ export async function POST(request: NextRequest) {
         result.order?.engagement_id ?? result.receipt?.engagementId ?? null,
       fundTxHash:
         result.order?.fund_tx_hash ?? result.receipt?.fundTxHash ?? null,
+      pollarPaymentTxHash: cleanPollarPaymentTxHash || null,
+      pollarPaymentVerified,
     });
 
     // Redactar el PIN secreto de recojo (solo para la caserita) de la respuesta del comprador

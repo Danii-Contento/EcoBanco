@@ -844,6 +844,107 @@ export async function approveAndReleaseMultiReleaseOrder(params: {
 }
 
 /**
+ * Envía USDC reales en Stellar Testnet desde la Tesorería Operativa hacia
+ * una cuenta clásica G... de Pollar que ya tenga el trustline de USDC activo.
+ */
+export async function sendTestnetUsdcFromTreasury(params: {
+  destination: string;
+  amountUsdc: number;
+  memo?: string;
+}): Promise<{
+  txHash: string;
+  amountUsdc: number;
+  destination: string;
+  source: string;
+}> {
+  if (
+    (process.env.NEXT_PUBLIC_STELLAR_NETWORK || "").trim().toLowerCase() ===
+    "mainnet"
+  ) {
+    throw new Error(
+      "Esta recarga de prueba solo está habilitada en Stellar Testnet."
+    );
+  }
+
+  const cleanDestination = (params.destination || "").trim();
+  if (!isClassicStellarGAddress(cleanDestination)) {
+    throw new Error("La dirección Stellar de destino es inválida.");
+  }
+
+  const { treasuryPublic, treasuryKeypair } = getTrustlessWorkEnv();
+  if (cleanDestination === treasuryPublic) {
+    throw new Error(
+      "La cuenta de destino no puede ser la misma Tesorería Operativa."
+    );
+  }
+
+  const roundedAmount = Math.round(Number(params.amountUsdc) * 100) / 100;
+  if (
+    !Number.isFinite(roundedAmount) ||
+    roundedAmount < 1 ||
+    roundedAmount > 500
+  ) {
+    throw new Error(
+      "El monto de recarga en Testnet debe estar entre 1 y 500 USDC."
+    );
+  }
+
+  const horizonUrl = getHorizonTestnetUrl();
+  await ensureTreasuryReady(Math.max(50, roundedAmount + 10));
+
+  const destAcct = await fetchHorizonAccount(cleanDestination);
+  const hasUsdcTrustline = Boolean(
+    destAcct?.balances?.some(
+      (b) =>
+        b.asset_code === "USDC" &&
+        b.asset_issuer === STELLAR_TESTNET_USDC_ISSUER
+    )
+  );
+  if (!hasUsdcTrustline) {
+    throw new Error(
+      "La cuenta aún no tiene activo el respaldo USDC en Testnet. Reintenta en unos segundos."
+    );
+  }
+
+  const server = new StellarSdk.Horizon.Server(horizonUrl);
+  const horizonAccount = await server.loadAccount(treasuryPublic);
+  const usdcAsset = new StellarSdk.Asset("USDC", STELLAR_TESTNET_USDC_ISSUER);
+
+  const txBuilder = new StellarSdk.TransactionBuilder(horizonAccount, {
+    fee: StellarSdk.BASE_FEE,
+    networkPassphrase: StellarSdk.Networks.TESTNET,
+  }).addOperation(
+    StellarSdk.Operation.payment({
+      destination: cleanDestination,
+      asset: usdcAsset,
+      amount: roundedAmount.toFixed(2),
+    })
+  );
+
+  const cleanMemo = (params.memo || "").trim();
+  if (cleanMemo) {
+    txBuilder.addMemo(StellarSdk.Memo.text(cleanMemo.slice(0, 28)));
+  }
+
+  const tx = txBuilder.setTimeout(60).build();
+  tx.sign(treasuryKeypair);
+  const submitRes = await server.submitTransaction(tx);
+
+  console.info("[EcoBanco Testnet Audit][POLLAR_QR_FUND_OK]", {
+    txHash: submitRes.hash,
+    destination: cleanDestination,
+    amountUsdc: roundedAmount,
+  });
+
+  return {
+    txHash: submitRes.hash,
+    amountUsdc: roundedAmount,
+    destination: cleanDestination,
+    source: treasuryPublic,
+  };
+}
+
+/**
  * Diagnóstico de lectura para verificar conectividad en Stellar Testnet y Trustless Work Dev API.
  */
 export async function getTrustlessWorkTestnetStatus(): Promise<{

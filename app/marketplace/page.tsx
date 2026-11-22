@@ -6,6 +6,7 @@ import { ArrowLeft, MapPin, Search, User as UserIcon, X } from "lucide-react";
 import { usePollar } from "@pollar/react";
 import {
   ensurePollarWalletAndSync,
+  payWithPollarWallet,
   PollarSyncResult,
 } from "@/app/lib/pollarWallet";
 import {
@@ -287,6 +288,33 @@ export default function MarketplacePage() {
       setPurchaseError(null);
       setOrderError(null);
 
+      let pollarPaymentTxHash: string | undefined;
+      if (isPollarAuthenticated) {
+        try {
+          const cfgRes = await fetch("/api/escrow", { cache: "no-store" });
+          if (cfgRes.ok) {
+            const cfgData = (await cfgRes.json()) as {
+              operationalAccount?: string | null;
+            };
+            if (cfgData.operationalAccount) {
+              const totalOrderBs =
+                Math.round(Number(product.priceMotes) * quantity * 100) / 100;
+              const pollarPay = await payWithPollarWallet(getPollarClient(), {
+                destination: cfgData.operationalAccount,
+                amountUsdc: totalOrderBs,
+                memo: "ECOBANCO PEDIDO",
+                waitForBalanceMs: paymentMethod === "fiat" ? 1800 : 0,
+              });
+              if (pollarPay.paid && pollarPay.txHash) {
+                pollarPaymentTxHash = pollarPay.txHash;
+              }
+            }
+          }
+        } catch {
+          // Pago silencioso con Pollar: jamás bloquea el pedido comunitario
+        }
+      }
+
       const res = await fetch("/api/escrow", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -296,6 +324,7 @@ export default function MarketplacePage() {
           paymentMethod,
           quantity,
           specialNotes: specialNotes.trim() || undefined,
+          ...(pollarPaymentTxHash ? { pollarPaymentTxHash } : {}),
         }),
       });
       const data = await res.json();

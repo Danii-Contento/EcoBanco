@@ -10,6 +10,7 @@ import {
   readSession,
 } from "@/app/lib/session";
 import { clearMerchantRuntimeCache, createEmptyBuyer, db } from "@/app/lib/store";
+import { sanitizeUserError } from "@/app/lib/friendlyCopy";
 import { RiderVehicleType } from "@/app/types/ecobanco";
 
 export async function GET(request: NextRequest) {
@@ -85,6 +86,8 @@ export async function POST(request: NextRequest) {
       stellar_address,
       pollarUserId,
       stellarAddress,
+      orderRef,
+      order_ref,
     } = body;
 
     const resolvedPollarUserId =
@@ -489,6 +492,96 @@ export async function POST(request: NextRequest) {
           message: successMessage,
           creditedBs: result.creditedBs,
           pollarOrderId: result.pollarOrderId,
+          buyer: state.buyer,
+          merchant: state.merchant,
+          activeBuyerType: state.activeBuyerType,
+        })
+      );
+    }
+
+    if (action === "testnet_qr_topup") {
+      const resolvedPurpose =
+        purpose === "prosumer_subscription"
+          ? "prosumer_subscription"
+          : purpose === "merchant_premium"
+          ? "merchant_premium"
+          : "fiat_topup";
+      const targetRole: "buyer" | "merchant" =
+        resolvedPurpose === "merchant_premium"
+          ? "merchant"
+          : resolvedPurpose === "prosumer_subscription"
+          ? "buyer"
+          : role === "merchant"
+          ? "merchant"
+          : "buyer";
+
+      if (targetRole === "merchant" && !session.merchantId) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Debes iniciar sesión como caserita para completar esta recarga.",
+            },
+            { status: session.buyerId || session.riderId ? 403 : 401 }
+          )
+        );
+      }
+      if (targetRole === "buyer" && !session.buyerId) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error:
+                "Debes iniciar sesión como vecino para completar esta recarga.",
+            },
+            { status: session.merchantId || session.riderId ? 403 : 401 }
+          )
+        );
+      }
+
+      const result = await db.executeTestnetQrTopup(session, {
+        role: targetRole,
+        purpose: resolvedPurpose,
+        amountBs: Number(amountBs),
+        orderRef: String(orderRef || order_ref || ""),
+        pollarUserId: resolvedPollarUserId || null,
+        stellarAddress: resolvedStellarAddress || null,
+      });
+
+      if (!result.ok) {
+        const statusCode = result.duplicate
+          ? 409
+          : result.forbidden
+          ? 403
+          : result.unauthorized
+          ? 401
+          : 400;
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              error: sanitizeUserError(result.error),
+              duplicate: Boolean(result.duplicate),
+            },
+            { status: statusCode }
+          )
+        );
+      }
+
+      const state = await db.getSessionUsers(session);
+      const creditedRounded = Math.round(result.creditedBs ?? Number(amountBs));
+      const successMessage =
+        resolvedPurpose === "prosumer_subscription"
+          ? "¡Club Vecino activado con éxito! Se acreditaron +50 MOTES y 5 envíos ecológicos incluidos."
+          : resolvedPurpose === "merchant_premium"
+          ? "¡Caserita Aliada activada con éxito! Tu cobro directo a QR bancario y 5 envíos ecológicos están listos."
+          : `¡Recarga de ${creditedRounded} Bs acreditada en tu libreta comunitaria!`;
+
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          message: successMessage,
+          creditedBs: result.creditedBs,
+          pollarOrderId: result.pollarOrderId,
+          onchainTxHash: result.onchainTxHash,
+          treasuryPublic: result.treasuryPublic,
           buyer: state.buyer,
           merchant: state.merchant,
           activeBuyerType: state.activeBuyerType,
