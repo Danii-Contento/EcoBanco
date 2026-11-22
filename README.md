@@ -1,22 +1,9 @@
 # 🌱 EcoBanco Bolivia — Recuperando nuestro valor en comunidad
 
-> [!IMPORTANT]
-> **Aclaración de Entrega para Jurados y Evaluadores** *(registrada el **22 de noviembre de 2026 a las 12:08 hora Bolivia / 16:08 UTC**)*
->
-> Todo el código, las remediaciones de privacidad y seguridad, las cuentas demo ficticias y las 9 transacciones verificadas en Stellar/Soroban Testnet fueron subidos a `main` y desplegados en producción **antes del cierre de la hackathon** (commits `9236345` a las `08:56 BOT` y `f7c4792` a las `10:16 BOT`). Sin embargo, por problemas de conexión a internet en los minutos finales antes del cierre del portal Atlas (`11:59 BOT`), no fue posible guardar en el formulario web las correcciones de los párrafos ni actualizar los enlaces del **Pitch Deck** y del **Video Demo**.
->
-> * 📂 **Pitch Deck actualizado + Video Demo (carpeta compartida en Google Drive):** [https://drive.google.com/drive/folders/1t3xWmeUute2KVm1iiOwcSi2sKlmpOY0R?usp=sharing](https://drive.google.com/drive/folders/1t3xWmeUute2KVm1iiOwcSi2sKlmpOY0R?usp=sharing)
->
-> **Correcciones vigentes que sustituyen el borrador previo del formulario Atlas:**
-> * **Pitch en una frase:** *Marketplace barrial B2B2C con 0% comisión, Pago Protegido y reparto ecológico para caseritas y vecinos de El Alto.* *(El Bot de WhatsApp corresponde a **Fase 1 — próximamente**, no al MVP actual).*
-> * **Tipo de cliente y modelo de ingresos:** **B2B2C** · **Freemium + Suscripción opcional** (**0% comisión por venta**, sin `fee per transaction`) · Plan Base `0 Bs/mes` + suscripción opcional *Caserita Aliada / Prosumidor* de `100 Bs/mes` (pagable en Bs o 100 MOTES 1:1; incluye QR propio, 5 envíos ecológicos y visibilidad).
-> * **Tracción verificable:** **1 caserita real activa** (*Doña Eliana*, Mercado Villa Exaltación Puesto 28 — 1 pedido piloto real liquidado de `32 Bs`) + **2 caseritas en onboarding**, 4 vehículos ecológicos (3 bicis, 1 moto eléctrica) y testimonios reales en TikTok ([`@eco.banco.bolivia`](https://www.tiktok.com/@eco.banco.bolivia), 757 seguidores liderados por Fabiola).
-> * **Transparencia técnica:** La recarga QR vía Pollar opera en **modo simulado sobre Stellar Testnet**; en **Fase 0** operamos bajo **Custodia Operativa Programable en Soroban** (Tesorería fondea el escrow para fricción cero) con migración **No Custodial** (Pollar Smart Wallets) y convenios **PSAV/ASFI (RD BCB 082/2024)** planificados para **Fase 2**.
-
 **EcoBanco Bolivia** es un marketplace barrial **B2B2C** con **Pago Protegido** (escrow programable sobre Stellar/Soroban Testnet) y **Eco-Delivery** en bicicleta o moto eléctrica para caseritas de mercados populares y vecinos de **El Alto y Achocalla, Bolivia**.
 
 * **Sitio público (MVP en Stellar Testnet):** [https://www.ecobanco.lat](https://www.ecobanco.lat)
-* **Pitch Deck actualizado y Video Demo (Google Drive):** [Carpeta compartida oficial](https://drive.google.com/drive/folders/1t3xWmeUute2KVm1iiOwcSi2sKlmpOY0R?usp=sharing)
+* **Pitch Deck y Video Demo:** [Carpeta en Google Drive](https://drive.google.com/drive/folders/1t3xWmeUute2KVm1iiOwcSi2sKlmpOY0R?usp=sharing)
 * **Evidencia comunitaria y testimonios reales (757 seguidores):** [TikTok @eco.banco.bolivia](https://www.tiktok.com/@eco.banco.bolivia)
 * **Modelo de negocio en una línea:** Plan Base **0 Bs/mes y 0% comisión por venta** para caseritas y vecinos + suscripción opcional **Caserita Aliada / Prosumidor de 100 Bs/mes** (pagable en Bs o MOTES de ventas, incluye QR propio, 5 envíos ecológicos de 5 Bs y visibilidad barrial) + tarifa comunitaria de **5 Bs** al Eco-Rider.
 
