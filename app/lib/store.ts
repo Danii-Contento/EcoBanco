@@ -8,7 +8,6 @@ import {
   User,
 } from "../types/ecobanco";
 import { EcoBancoSession } from "./session";
-import { formatOrderCode } from "./friendlyCopy";
 import {
   areSameBolivianPhone,
   isValidBolivianPhone,
@@ -749,8 +748,6 @@ export class SupabaseEcoBancoRepository {
       avatar_url: "",
       profile_completed: false,
       phone: cleanPhone,
-      phone_whatsapp: cleanPhone,
-      whatsapp_opt_in: true,
       password: cleanPass,
       bank_qr_url: "",
       email: null,
@@ -1186,8 +1183,6 @@ export class SupabaseEcoBancoRepository {
       avatar_url: "",
       profile_completed: Boolean(cleanAddress),
       phone: cleanPhone,
-      phone_whatsapp: cleanPhone,
-      whatsapp_opt_in: true,
       password: null,
       bank_qr_url: "",
       email: cleanEmail || null,
@@ -2191,8 +2186,6 @@ export class SupabaseEcoBancoRepository {
       }
     }
 
-    const shortCode = formatOrderCode(orderId);
-
     const orderRow: Order = {
       id: orderId,
       contract_id: onchainEscrow.contractId,
@@ -2209,8 +2202,6 @@ export class SupabaseEcoBancoRepository {
       buyer_type: buyerType,
       amount_motes: priceMotes,
       status: "LOCKED_IN_ESCROW",
-      short_code: shortCode,
-      order_stage: "PAID_PROTECTED",
       created_at: nowIso,
     };
 
@@ -2251,10 +2242,6 @@ export class SupabaseEcoBancoRepository {
       rider_phone: null,
       picked_up_at: null,
       delivered_at: null,
-      short_code: shortCode,
-      order_stage: "PREPARING",
-      ready_for_pickup_at: null,
-      whatsapp_notified_at: null,
       created_at: nowIso,
     };
 
@@ -2562,8 +2549,6 @@ export class SupabaseEcoBancoRepository {
       avatar_url: resolvedSelfieUrl,
       profile_completed: true,
       phone: cleanPhone,
-      phone_whatsapp: cleanPhone,
-      whatsapp_opt_in: true,
       password: cleanPin,
       bank_qr_url: "",
       email: null,
@@ -2766,7 +2751,6 @@ export class SupabaseEcoBancoRepository {
 
     const pickupPatch: Partial<Delivery> = {
       delivery_status: "in_transit",
-      order_stage: "IN_TRANSIT",
       rider_id: rider.id,
       rider_name: rider.name,
       rider_phone: rider.phone,
@@ -2872,13 +2856,11 @@ export class SupabaseEcoBancoRepository {
     if (order && order.status !== "RELEASED") {
       const patchedOrder = await supabaseTables.updateOrder(order.id, {
         status: "RELEASED",
-        order_stage: "DELIVERED",
         release_tx_hash: releaseTxHash,
       });
       updatedOrder = patchedOrder || {
         ...order,
         status: "RELEASED",
-        order_stage: "DELIVERED",
         release_tx_hash: releaseTxHash,
       };
 
@@ -2901,7 +2883,6 @@ export class SupabaseEcoBancoRepository {
 
     const updatedDelivery = await supabaseTables.updateDelivery(target.id, {
       delivery_status: "delivered",
-      order_stage: "DELIVERED",
       delivered_at: new Date().toISOString(),
       ...(riderRow
         ? {

@@ -50,9 +50,6 @@ export interface SupabaseUserRow {
   rider_invite_code?: string | null;
   pollar_user_id?: string | null;
   stellar_address?: string | null;
-  phone_whatsapp?: string | null;
-  whatsapp_opt_in?: boolean;
-  whatsapp_last_interaction_at?: string | null;
   created_at: string;
 }
 
@@ -106,10 +103,6 @@ export interface SupabaseDeliveryRow {
   delivered_at?: string | null;
   quantity?: number;
   special_notes?: string | null;
-  short_code?: string | null;
-  order_stage?: string | null;
-  ready_for_pickup_at?: string | null;
-  whatsapp_notified_at?: string | null;
   created_at: string;
 }
 
@@ -342,10 +335,6 @@ function normalizeDeliveryRow(raw: SupabaseDeliveryRow): Delivery {
     delivered_at: raw.delivered_at ?? null,
     quantity: raw.quantity !== undefined ? Number(raw.quantity) : undefined,
     special_notes: raw.special_notes ?? null,
-    short_code: raw.short_code ?? null,
-    order_stage: raw.order_stage ?? null,
-    ready_for_pickup_at: raw.ready_for_pickup_at ?? null,
-    whatsapp_notified_at: raw.whatsapp_notified_at ?? null,
     created_at: raw.created_at || new Date().toISOString(),
   };
 }
@@ -379,10 +368,6 @@ function toDeliveryDbRow(d: Delivery): SupabaseDeliveryRow {
     delivered_at: d.delivered_at ?? null,
     quantity: d.quantity,
     special_notes: d.special_notes ?? null,
-    short_code: d.short_code ?? null,
-    order_stage: d.order_stage ?? null,
-    ready_for_pickup_at: d.ready_for_pickup_at ?? null,
-    whatsapp_notified_at: d.whatsapp_notified_at ?? null,
     created_at: d.created_at || new Date().toISOString(),
   };
 }
@@ -419,12 +404,6 @@ function toDeliveryDbPatch(
     out.release_tx_hash = patch.release_tx_hash;
   if (patch.picked_up_at !== undefined) out.picked_up_at = patch.picked_up_at;
   if (patch.delivered_at !== undefined) out.delivered_at = patch.delivered_at;
-  if (patch.short_code !== undefined) out.short_code = patch.short_code;
-  if (patch.order_stage !== undefined) out.order_stage = patch.order_stage;
-  if (patch.ready_for_pickup_at !== undefined)
-    out.ready_for_pickup_at = patch.ready_for_pickup_at;
-  if (patch.whatsapp_notified_at !== undefined)
-    out.whatsapp_notified_at = patch.whatsapp_notified_at;
   return out;
 }
 

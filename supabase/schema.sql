@@ -212,28 +212,5 @@ CREATE POLICY "EcoBanco Delete Storage"
 ON storage.objects FOR DELETE
 USING (bucket_id IN ('avatars', 'product-images', 'qr-bancarios', 'rider-verifications'));
 
--- 8. MIGRACIÓN ADITIVA WHATSAPP-FIRST (100% IDEMPOTENTE)
--- Prepara la plataforma para notificaciones automáticas y operación por WhatsApp Bot
-ALTER TABLE public.users ADD COLUMN IF NOT EXISTS phone_whatsapp TEXT;
-ALTER TABLE public.users ADD COLUMN IF NOT EXISTS whatsapp_opt_in BOOLEAN NOT NULL DEFAULT TRUE;
-ALTER TABLE public.users ADD COLUMN IF NOT EXISTS whatsapp_last_interaction_at TIMESTAMPTZ;
-
-ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS short_code TEXT;
-ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS order_stage TEXT NOT NULL DEFAULT 'PAID_PROTECTED';
-
-ALTER TABLE public.deliveries ADD COLUMN IF NOT EXISTS short_code TEXT;
-ALTER TABLE public.deliveries ADD COLUMN IF NOT EXISTS order_stage TEXT NOT NULL DEFAULT 'PREPARING';
-ALTER TABLE public.deliveries ADD COLUMN IF NOT EXISTS ready_for_pickup_at TIMESTAMPTZ;
-ALTER TABLE public.deliveries ADD COLUMN IF NOT EXISTS whatsapp_notified_at TIMESTAMPTZ;
-
-CREATE INDEX IF NOT EXISTS idx_users_phone_whatsapp ON public.users (phone_whatsapp);
-CREATE INDEX IF NOT EXISTS idx_orders_short_code ON public.orders (short_code);
-CREATE INDEX IF NOT EXISTS idx_deliveries_short_code ON public.deliveries (short_code);
-
-UPDATE public.users
-SET phone_whatsapp = phone
-WHERE phone_whatsapp IS NULL
-  AND phone IS NOT NULL;
-
--- 9. Recargar caché de esquema de PostgREST
+-- 8. Recargar caché de esquema de PostgREST
 NOTIFY pgrst, 'reload schema';

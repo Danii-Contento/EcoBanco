@@ -101,8 +101,6 @@ export interface Order {
   buyer_type: "buyer" | "merchant";
   amount_motes: number;
   status: "LOCKED_IN_ESCROW" | "RELEASED" | string;
-  short_code?: string | null;
-  order_stage?: string | null;
   created_at: string;
 }
 
@@ -145,10 +143,6 @@ export interface Delivery {
   rider_phone?: string | null;
   picked_up_at?: string | null;
   delivered_at?: string | null;
-  short_code?: string | null;
-  order_stage?: string | null;
-  ready_for_pickup_at?: string | null;
-  whatsapp_notified_at?: string | null;
 }
 
 export interface User {
@@ -163,8 +157,6 @@ export interface User {
   avatarUrl?: string;
   profileCompleted?: boolean;
   phone?: string;
-  phoneWhatsapp?: string | null;
-  whatsappOptIn?: boolean;
   hasFourDigitPin?: boolean;
   bankQrUrl?: string;
   email?: string;

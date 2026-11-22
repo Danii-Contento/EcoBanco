@@ -11,7 +11,7 @@ Con **comisión 0 Bs para el barrio**, **recargas por QR bancario boliviano**, *
 - **💵 MOTES (`1 MOTE = 1 Bs`)**: Es la unidad de valor comunitaria dentro de tu Libreta EcoBanco. Un MOTE equivale siempre a un Boliviano (`1 MOTE = 1 Bs`) para comprar productos, recibir bonos de bienvenida o acumular ingresos de tus ventas y entregas.
 - **🛡️ Pago Protegido EcoBanco**: Cuando un vecino realiza una compra, el dinero **no desaparece ni queda en riesgo**. Se resguarda en EcoBanco y se acredita de forma íntegra a la caserita únicamente cuando el vecino recibe su pedido y se valida la entrega.
 - **📶 Modo Megas**: Las fotos de productos, comprobantes y verificaciones se optimizan y comprimen automáticamente en tu propio teléfono antes de subirse (ahorrando hasta 80% de tus megas y cargando rápido incluso con señal 3G).
-- **💬 Operación simple + WhatsApp**: Toda la experiencia evita palabras complicadas o pasos innecesarios. Además, el sistema incluye notificaciones y comandos rápidos por WhatsApp (`SALDO`, `CATALOGO`, `LISTO`, `ENTREGADO`).
+- **💬 Operación simple y cercana**: Toda la experiencia evita palabras complicadas o pasos innecesarios, manteniendo todo en lenguaje comunitario desde tu teléfono boliviano (`+591XXXXXXXX`) y coordinación directa por enlaces opcionales de WhatsApp.
 
 ---
 
@@ -40,21 +40,6 @@ Con **comisión 0 Bs para el barrio**, **recargas por QR bancario boliviano**, *
 2. Navega con una sola mano usando botones grandes y accesibles en tres pestañas: **Disponibles**, **En Curso** y **Mis Ganancias**.
 3. Acepta un pedido disponible, usa el acceso rápido a **Google Maps** o **WhatsApp** para coordinar el punto exacto y recoge el producto mostrando o ingresando el código de 4 dígitos de la caserita.
 4. Lleva el pedido al vecino, pide su código de entrega de 4 dígitos para validarlo y recibe automáticamente **5 Bs** por envío en tu libreta.
-
----
-
-## 💬 Comandos rápidos por WhatsApp
-
-Cuando el asistente de WhatsApp esté enlazado con tu cuenta de EcoBanco (`+591XXXXXXXX`), puedes escribir directamente:
-
-| Comando | Quién puede usarlo | Qué hace |
-| :--- | :--- | :--- |
-| `SALDO` | Vecinos, Caseritas y Eco-Riders | Muestra tu saldo actual en Bs y MOTES (`1 MOTE = 1 Bs`). |
-| `CATALOGO` | Cualquier persona | Lista hasta 6 productos frescos disponibles hoy en el barrio con su precio en Bs. |
-| `LISTO #ECO-XXXX` | Caserita dueña del pedido | Marca el pedido como listo para recoger y avisa al repartidor y al vecino. |
-| `ENTREGADO #ECO-XXXX` | Vecino dueño del pedido | Confirma la recepción del pedido y entrega el Pago Protegido a la caserita. |
-| `ENTREGADO #ECO-XXXX PIN` | Eco-Rider asignado | Valida el código de entrega de 4 dígitos y acredita las ganancias al instante. |
-| `AYUDA` | Cualquier persona | Muestra la guía rápida de comandos disponibles. |
 
 ---
 
@@ -95,13 +80,10 @@ Sí. EcoBanco aplica **aislamiento estricto de sesión por rol**. Cada vez que i
 ### 11. ¿Qué pasa si tengo mala señal de internet al momento de comprar o entregar?
 Si ocurre un corte momentáneo de conexión, EcoBanco detiene la operación de forma segura o muestra un aviso claro sin duplicar cobros. Si estás confirmando una entrega como Eco-Rider, la plataforma valida de manera atómica que dos repartidores no puedan tomar ni cerrar el mismo pedido al mismo tiempo.
 
-### 12. ¿Para qué sirven las alertas por WhatsApp?
-Te mantienen al tanto en tiempo real sin necesidad de tener la página abierta todo el día: avisan a la caserita apenas entra una compra pagada, notifican al vecino cuando su pedido está listo o en camino, y confirman al repartidor cuando sus 5 Bs fueron acreditados.
-
-### 13. ¿Cómo se protegen mis documentos y datos personales (CI, selfie, celular)?
+### 12. ¿Cómo se protegen mis documentos y datos personales (CI, selfie, celular)?
 Tu número se normaliza en formato seguro boliviano (`+591XXXXXXXX`), los códigos privados jamás se muestran a terceros no autorizados (el repartidor nunca ve tus PINes antes de validarlos ni el vecino ve el código secreto de la caserita), y las verificaciones pasan por controles de servidor exclusivos para tu sesión activa.
 
-### 14. ¿Qué ocurre si una caserita cierra temporalmente su puesto?
+### 13. ¿Qué ocurre si una caserita cierra temporalmente su puesto?
 Cuando la caserita marca su puesto como **Cerrado** desde `/panel-caserita`, sus productos dejan de aparecer en el Mercado Comunitario para nuevos pedidos, mientras ella conserva intacto su catálogo y el acceso a todos sus pedidos ya recibidos hasta completarlos.
 
 ---
@@ -115,7 +97,6 @@ Esta sección está dirigida exclusivamente al equipo técnico de despliegue y a
 - **Base de Datos y Storage**: Supabase PostgreSQL (API REST v1 via Service Role en servidor) + 4 buckets públicos de Storage (`avatars`, `product-images`, `qr-bancarios`, `rider-verifications`).
 - **Billetera Embebida y On-Ramp QR (Testnet)**: `@pollar/core` y `@pollar/react` configurados estrictamente en `stellarNetwork: "testnet"` (`app/providers/PollarAppProvider.tsx`, `app/lib/pollarWallet.ts`).
 - **Escrow Multi-Release (Soroban Testnet)**: `@trustless-work/escrow` (`dev.api.trustlesswork.com`) y `@stellar/stellar-sdk` sobre `https://horizon-testnet.stellar.org` (`app/lib/trustlessWork.ts`). Crea, fondea desde Tesorería/cuenta, registra evidencia del hito `"0"` (recojo) y aprueba/libera ambos hitos (caserita + repartidor) en Testnet.
-- **Puente WhatsApp-First**: `app/lib/whatsappBridge.ts` (soporta Meta Cloud API v21.0 y modo automático `dry-run` sin bloquear peticiones) + `app/api/whatsapp/route.ts` (`GET` verificación Meta y `POST` webhook firmado).
 
 ### Configuración inicial del entorno
 
@@ -123,8 +104,8 @@ Esta sección está dirigida exclusivamente al equipo técnico de despliegue y a
    ```bash
    cp .env.example .env.local
    ```
-2. Completa todas las variables requeridas en `.env.local` (Supabase URL/keys, `STELLAR_TREASURY_PUBLIC`, `STELLAR_TREASURY_SECRET`, `NEXT_PUBLIC_POLLAR_PUBLISHABLE_KEY` con prefijo `pub_testnet_`, `TRUSTLESS_WORK_API_KEY`, y opcionalmente `WHATSAPP_*` para Meta Cloud API).
-3. Ejecuta el archivo completo [`supabase/schema.sql`](supabase/schema.sql) en el **SQL Editor** de tu proyecto Supabase. El script es idempotente y aplica tanto las tablas base (`users`, `products`, `orders`, `deliveries`, `ramp_transactions`) como la migración aditiva de WhatsApp (`phone_whatsapp`, `whatsapp_opt_in`, `short_code`, `order_stage`, etc.) y recarga el caché de PostgREST.
+2. Completa todas las variables requeridas en `.env.local` (Supabase URL/keys, `STELLAR_TREASURY_PUBLIC`, `STELLAR_TREASURY_SECRET`, `NEXT_PUBLIC_POLLAR_PUBLISHABLE_KEY` con prefijo `pub_testnet_` y `TRUSTLESS_WORK_API_KEY`).
+3. Ejecuta el archivo completo [`supabase/schema.sql`](supabase/schema.sql) en el **SQL Editor** de tu proyecto Supabase. El script es idempotente, crea y actualiza las 5 tablas base (`users`, `products`, `orders`, `deliveries`, `ramp_transactions`), configura los buckets de Storage y recarga el caché de PostgREST.
 
 ### Scripts de auditoría y verificación
 
@@ -143,9 +124,3 @@ npm install
 npm run dev     # http://localhost:3000
 npm run build   # Verificación de compilación TypeScript y Next.js producción
 ```
-
-### Configuración del Webhook de WhatsApp Cloud API (Meta)
-- **Callback URL**: `https://<tu-dominio>/api/whatsapp`
-- **Verify Token**: el valor configurado en `WHATSAPP_VERIFY_TOKEN`.
-- Si defines `WHATSAPP_APP_SECRET`, el endpoint `POST /api/whatsapp` valida automáticamente la cabecera `x-hub-signature-256`.
-- En desarrollo local sin credenciales Meta, todos los eventos salientes quedan trazados en consola bajo `[EcoBanco WhatsApp Bridge][DRY_RUN]`.

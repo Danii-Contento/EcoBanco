@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applyNoStoreHeaders, readSession } from "@/app/lib/session";
 import { db } from "@/app/lib/store";
-import { notifyProductPublished } from "@/app/lib/whatsappBridge";
 
 export async function GET(request: NextRequest) {
   try {
@@ -109,15 +108,6 @@ export async function POST(request: NextRequest) {
       merchantId: session.merchantId,
     });
 
-    void notifyProductPublished({
-      event: "created",
-      sellerId: result.product.sellerId || session.merchantId,
-      sellerName: result.product.sellerName || "Tu puesto",
-      sellerPhone: result.product.sellerPhone ?? null,
-      productName: result.product.name,
-      priceBs: Number(result.product.priceMotes ?? 0),
-    }).catch(() => undefined);
-
     return applyNoStoreHeaders(
       NextResponse.json(
         {
@@ -197,17 +187,6 @@ export async function PUT(request: NextRequest) {
       includeClosed: true,
       merchantId: session.merchantId,
     });
-
-    if (result.product) {
-      void notifyProductPublished({
-        event: "updated",
-        sellerId: result.product.sellerId || session.merchantId,
-        sellerName: result.product.sellerName || "Tu puesto",
-        sellerPhone: result.product.sellerPhone ?? null,
-        productName: result.product.name,
-        priceBs: Number(result.product.priceMotes ?? 0),
-      }).catch(() => undefined);
-    }
 
     return applyNoStoreHeaders(
       NextResponse.json({

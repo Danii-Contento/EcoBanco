@@ -9,11 +9,6 @@ import {
 } from "@/app/lib/session";
 import { clearMerchantRuntimeCache, db } from "@/app/lib/store";
 import { sanitizeUserError } from "@/app/lib/friendlyCopy";
-import {
-  notifyDeliveryAccepted,
-  notifyDeliveryPickedUp,
-  notifyEscrowReleased,
-} from "@/app/lib/whatsappBridge";
 import { RiderVehicleType } from "@/app/types/ecobanco";
 
 export async function GET(request: NextRequest) {
@@ -216,21 +211,6 @@ export async function POST(request: NextRequest) {
 
       const state = await db.getDeliveriesState(session);
 
-      if (result.delivery) {
-        const del = result.delivery;
-        void notifyDeliveryAccepted({
-          orderId: del.order_id,
-          shortCode: del.short_code ?? null,
-          productName: del.product_name || "Pedido comunitario",
-          sellerId: del.seller_id ?? null,
-          sellerPhone: del.seller_phone ?? null,
-          buyerId: del.buyer_id ?? null,
-          riderName:
-            del.rider_name || state.rider?.name || "Repartidor EcoBanco",
-          vehicleType: del.vehicle_type,
-        }).catch(() => undefined);
-      }
-
       return applyNoStoreHeaders(
         NextResponse.json({
           message:
@@ -275,19 +255,6 @@ export async function POST(request: NextRequest) {
       }
 
       const state = await db.getDeliveriesState(session);
-
-      if (result.delivery) {
-        const del = result.delivery;
-        void notifyDeliveryPickedUp({
-          orderId: del.order_id,
-          shortCode: del.short_code ?? null,
-          productName: del.product_name || "Pedido comunitario",
-          buyerId: del.buyer_id ?? null,
-          riderName:
-            del.rider_name || state.rider?.name || "Repartidor EcoBanco",
-          deliveryPin: del.delivery_pin ?? null,
-        }).catch(() => undefined);
-      }
 
       return applyNoStoreHeaders(
         NextResponse.json({
@@ -339,24 +306,6 @@ export async function POST(request: NextRequest) {
           result.delivery?.release_tx_hash ??
           null,
       });
-
-      if (result.order || result.delivery) {
-        const ord = result.order;
-        const del = result.delivery;
-        void notifyEscrowReleased({
-          orderId: ord?.id || del?.order_id || "",
-          shortCode: ord?.short_code ?? del?.short_code ?? null,
-          productName:
-            ord?.product_name || del?.product_name || "Pedido comunitario",
-          amountBs: Number(ord?.amount_motes ?? del?.amount_motes ?? 0),
-          sellerId: ord?.seller_id ?? del?.seller_id ?? null,
-          sellerPhone: del?.seller_phone ?? null,
-          buyerId: ord?.buyer_id ?? del?.buyer_id ?? null,
-          riderId: del?.rider_id ?? state.rider?.id ?? null,
-          riderPhone: del?.rider_phone ?? state.rider?.phone ?? null,
-          deliveryFeeBs: Number(del?.delivery_fee_motes ?? 5),
-        }).catch(() => undefined);
-      }
 
       return applyNoStoreHeaders(
         NextResponse.json({
